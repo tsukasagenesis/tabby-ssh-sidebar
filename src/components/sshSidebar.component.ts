@@ -13,7 +13,7 @@ import {
 } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
 import { Subject } from 'rxjs'
-import { takeUntil } from 'rxjs/operators'
+import { takeUntil, debounceTime } from 'rxjs/operators'
 import deepClone from 'clone-deep'
 
 interface ProfileGroup {
@@ -525,12 +525,19 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         await this.refreshProfiles()
         await this.refreshProfileGroups()
 
-        // Watch for config changes
-        this.subscribeUntilDestroyed(this.config.changed$, async () => {
-            this.configGroups = this.config.store.groups || []
-            await this.refreshProfileGroups()
-            await this.refreshProfiles()
-        })
+        // Watch for config changes (profiles added/deleted/modified)
+        // Config changes include profile edits, additions, and deletions
+        // Debounce to avoid multiple rapid refreshes
+        this.config.changed$
+            .pipe(
+                takeUntil(this.destroy$),
+                debounceTime(300)
+            )
+            .subscribe(async () => {
+                this.configGroups = this.config.store.groups || []
+                await this.refreshProfiles()
+                await this.refreshProfileGroups()
+            })
 
         // Watch for tab changes to update active connection indicators
         this.app.tabsChanged$
