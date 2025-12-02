@@ -1,6 +1,6 @@
 {
   "name": "tabby-ssh-sidebar",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A persistent SSH connections sidebar panel for Tabby Terminal with favorites, context menus, and profile management",
   "keywords": [
     "tabby-plugin",
