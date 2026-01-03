@@ -21,7 +21,7 @@ export class SSHSidebarService {
         private appRef: ApplicationRef,
         private injector: Injector,
         private config: ConfigService,
-    ) {}
+    ) { }
 
     show(): void {
         if (this.isVisible) {
@@ -66,10 +66,39 @@ export class SSHSidebarService {
     initialize(): void {
         const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
         // Open sidebar by default on first startup, or if explicitly set to visible
+        this.ensureFontAwesomeLoaded()
+
         if (pluginConfig.sidebarVisible !== false) {
             this.show()
         }
     }
+
+    private ensureFontAwesomeLoaded(): void {
+        const styleId = 'ssh-sidebar-fontawesome'
+        if (document.getElementById(styleId)) {
+            return
+        }
+
+        const fs = (window as any).nodeRequire('fs')
+        const path = (window as any).nodeRequire('path')
+
+        const cssPath = path.join(__dirname, 'assets', 'fontawesome', 'all.css')
+        const fontsDir = path.join(__dirname, 'assets', 'fontawesome', 'webfonts')
+
+        let css: string = fs.readFileSync(cssPath, 'utf8')
+
+        const fontsUrl = 'file://' + String(fontsDir).replace(/\\/g, '/') + '/'
+
+        css = css
+            .replace(/url\((['"]?)\.\.\/webfonts\//g, `url($1${fontsUrl}`)
+            .replace(/url\((['"]?)\.\.webfonts\//g, `url($1${fontsUrl}`)
+
+        const style = document.createElement('style')
+        style.id = styleId
+        style.textContent = css
+        document.head.appendChild(style)
+    }
+
 
     private createSidebar(): void {
         // Create component

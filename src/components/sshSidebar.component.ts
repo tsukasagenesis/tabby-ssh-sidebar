@@ -122,11 +122,14 @@ interface ContextMenuPosition {
                                      (click)="launchProfile(profile)"
                                      (contextmenu)="onProfileContextMenu($event, profile)">
 
-                                    <!-- Profile Icon -->
-                                    <profile-icon
-                                        [icon]="profile.icon"
-                                        [color]="profile.color">
-                                    </profile-icon>
+                                    <!-- Profile Icon (FontAwesome fallback renderer) -->
+                                    <i
+                                    class="profile-icon-fa"
+                                    [ngClass]="getFAIconClasses(profile.icon)"
+                                    [style.color]="profile.color || null"
+                                    aria-hidden="true">
+                                    </i>
+
 
                                     <!-- Profile Name & Description -->
                                     <div class="profile-info">
@@ -404,6 +407,13 @@ interface ContextMenuPosition {
             flex-shrink: 0;
         }
 
+        /* Fallback FontAwesome icon sizing to match <profile-icon> */
+        .profile-icon-fa {
+            width: 1.25rem;
+            flex-shrink: 0;
+            text-align: center;
+        }
+
         /* Hover Reveal Buttons */
         .hover-reveal {
             opacity: 0;
@@ -507,6 +517,61 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         @Inject(ProfileProvider) private profileProviders: ProfileProvider<Profile>[],
     ) {
         super()
+    }
+
+    getFAIconClasses(icon?: string): string[] {
+        const base = ['fa-fw']
+
+        if (!icon) {
+            return ['fas', 'fa-terminal', ...base, 'text-muted']
+        }
+
+        const s = String(icon).trim()
+
+        if (s.startsWith('<svg')) {
+            return ['fas', 'fa-terminal', ...base, 'text-muted']
+        }
+
+        const tokens = s.split(/\s+/).filter(Boolean)
+
+        const hasPrefix = tokens.some(t => ['fas', 'far', 'fab', 'fal', 'fad', 'fa-solid', 'fa-regular', 'fa-brands'].includes(t))
+        const hasFaName = tokens.some(t => t.startsWith('fa-'))
+        if (hasPrefix && hasFaName) {
+            return [...tokens, ...base]
+        }
+
+        const last = tokens[tokens.length - 1] ?? s
+        const name = last.startsWith('fa-') ? last.slice(3) : last
+
+        return ['fas', `fa-${name}`, ...base]
+    }
+
+
+    /**
+     * Normalizes whatever Tabby stores in profile.icon to what <profile-icon> expects.
+     * Supports:
+     * - "server"
+     * - "fa-server"
+     * - "fas fa-server" / "fab fa-github"
+     * - inline SVG ("<svg ...")
+     */
+    normalizeProfileIcon(icon?: string): string | null {
+        if (!icon) {
+            return null
+        }
+
+        const s = icon.trim()
+
+        // SVG pasted into the Icon field
+        if (s.startsWith('<svg')) {
+            return s
+        }
+
+        // Handle values like: "fas fa-server" / "fab fa-github" / "fa-server"
+        const lastToken = s.split(/\s+/).pop() || s
+        const name = lastToken.startsWith('fa-') ? lastToken.slice(3) : lastToken
+
+        return name || null
     }
 
     @HostListener('document:click', ['$event'])
@@ -772,7 +837,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             this.profiles.openNewTabForProfile(profile)
         } else {
             // Fallback to launchProfile method
-            (this.profiles as any).launchProfile(profile)
+            ; (this.profiles as any).launchProfile(profile)
         }
     }
 
@@ -781,13 +846,13 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         return this.app.tabs.some(tab => {
             const tabProfile = (tab as any).profile
             return tabProfile &&
-                   tabProfile.type === 'ssh' &&
-                   tabProfile.id === profile.id
+                tabProfile.type === 'ssh' &&
+                tabProfile.id === profile.id
         })
     }
 
     isProfileBlacklisted(profile: PartialProfile<Profile>): boolean {
-        return profile.id && this.config.store.profileBlacklist.includes(profile.id)
+        return Boolean(profile.id && this.config.store.profileBlacklist.includes(profile.id))
     }
 
     getConnectionCountText(): string {
@@ -851,7 +916,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
 
         try {
             // Use Tabby's pattern for opening settings with profiles tab
-            const { SettingsTabComponent } = window['nodeRequire']('tabby-settings')
+            const { SettingsTabComponent } = (window as any)['nodeRequire']('tabby-settings')
 
             // Check if a settings tab is already open
             const existingSettingsTab = this.app.tabs.find(tab => tab instanceof SettingsTabComponent)
@@ -879,50 +944,34 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             await new Promise(resolve => setTimeout(resolve, 500))
 
             // Try to find and click the profile element in the settings tab
-            // The ProfilesSettingsTab renders profiles as clickable list items
-            // Structure: .list-group-item.ps-5 (profile item, has padding-start: 5)
-            //   - Click on the main element triggers editProfile()
-            //   - DO NOT click on the .fa-play button (that launches the profile)
             let clicked = false
 
-            // Try multiple times with increasing delays to handle async rendering
             for (let attempt = 0; attempt < 5 && !clicked; attempt++) {
                 if (attempt > 0) {
                     await new Promise(resolve => setTimeout(resolve, 200))
                 }
 
-                // Find profile list items - they have .ps-5 class (padding-start: 5rem)
-                // This distinguishes them from group headers
                 const profileElements = document.querySelectorAll('.list-group-item.ps-5')
 
                 for (const element of Array.from(profileElements)) {
                     const textContent = element.textContent || ''
 
-                    // Check if this element contains our profile name
                     if (textContent.includes(profileName)) {
                         console.log(`Found profile element for "${profileName}", attempting click...`)
 
-                        // Make sure we're clicking on the main element, not a button
-                        // The template structure has the profile name in a .no-wrap div
                         const nameElement = element.querySelector('.no-wrap')
 
                         if (nameElement && nameElement.textContent?.trim() === profileName) {
-                            console.log(`Exact match found, clicking on profile name element...`)
+                            console.log('Exact match found, clicking on profile name element...')
 
                             try {
-                                // Click on the name element (guaranteed to trigger editProfile)
-                                const clickable = nameElement as HTMLElement
-                                clickable.click()
-                                console.log(`Clicked profile name for "${profileName}"`)
+                                ; (nameElement as HTMLElement).click()
                                 clicked = true
                                 break
                             } catch (err) {
                                 console.debug('Error clicking name element, trying main element:', err)
-
-                                // Fallback: click on the main list item
                                 try {
-                                    (element as HTMLElement).click()
-                                    console.log(`Clicked main element for "${profileName}"`)
+                                    ; (element as HTMLElement).click()
                                     clicked = true
                                     break
                                 } catch (err2) {
@@ -954,19 +1003,16 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         }
 
         const baseProfile: PartialProfile<Profile> = deepClone(this.contextMenuProfile)
-        delete baseProfile.id
-        baseProfile.name = this.translate.instant('{name} copy', this.contextMenuProfile)
+        delete (baseProfile as any).id
+        baseProfile.name = this.translate.instant('{name} copy', this.contextMenuProfile as any)
         baseProfile.isBuiltin = false
         baseProfile.isTemplate = false
 
-        // Write the new profile
         this.config.store.profiles = this.config.store.profiles || []
-        this.config.store.profiles.push(baseProfile)
+        this.config.store.profiles.push(baseProfile as any)
         await this.config.save()
 
-        // Refresh the profile list
         await this.refreshProfiles()
-
         this.contextMenuVisible = false
     }
 
@@ -986,9 +1032,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             command += ` -p ${port}`
         }
 
-        // Copy to clipboard
         this.platform.setClipboard({ text: command })
-
         this.contextMenuVisible = false
     }
 
@@ -1009,14 +1053,14 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     async contextMenuDelete(): Promise<void> {
-        if (!this.contextMenuProfile || this.contextMenuProfile.isBuiltin) {
+        if (!this.contextMenuProfile || (this.contextMenuProfile as any).isBuiltin) {
             this.contextMenuVisible = false
             return
         }
 
         const result = await this.platform.showMessageBox({
             type: 'warning',
-            message: this.translate.instant('Delete "{name}"?', this.contextMenuProfile),
+            message: this.translate.instant('Delete "{name}"?', this.contextMenuProfile as any),
             buttons: [
                 this.translate.instant('Delete'),
                 this.translate.instant('Cancel'),
@@ -1026,11 +1070,8 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         })
 
         if (result.response === 0) {
-            // Remove from config
-            this.config.store.profiles = this.config.store.profiles.filter(p => p.id !== this.contextMenuProfile!.id)
+            this.config.store.profiles = this.config.store.profiles.filter((p: any) => p.id !== this.contextMenuProfile!.id)
             await this.config.save()
-
-            // Refresh the profile list
             await this.refreshProfiles()
         }
 
@@ -1043,7 +1084,6 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             return
         }
 
-        // Add to pinned profiles
         if (!this.pinnedProfiles.includes(this.contextMenuProfile.id)) {
             this.pinnedProfiles.push(this.contextMenuProfile.id)
             this.savePinnedProfiles()
@@ -1059,7 +1099,6 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             return
         }
 
-        // Remove from pinned profiles
         this.pinnedProfiles = this.pinnedProfiles.filter(id => id !== this.contextMenuProfile!.id)
         this.savePinnedProfiles()
         await this.refreshProfileGroups()
@@ -1068,7 +1107,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     isProfilePinned(profile: PartialProfile<SSHProfile>): boolean {
-        return profile.id ? this.pinnedProfiles.includes(profile.id) : false
+        return Boolean(profile.id && this.pinnedProfiles.includes(profile.id))
     }
 
     private savePinnedProfiles(): void {

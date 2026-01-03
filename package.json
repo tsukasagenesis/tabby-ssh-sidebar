@@ -29,10 +29,11 @@
     "@angular/common": "17.3.5",
     "@angular/core": "17.3.5",
     "@angular/forms": "17.3.5",
+    "copy-webpack-plugin": "^13.0.1",
     "rxjs": "7.8.1",
     "tabby-core": "1.0.197-nightly.1",
-    "tabby-terminal": "1.0.197-nightly.1",
     "tabby-ssh": "1.0.197-nightly.1",
+    "tabby-terminal": "1.0.197-nightly.1",
     "ts-loader": "^9.5.1",
     "typescript": "^5.4.5",
     "webpack": "^5.91.0",
@@ -44,7 +45,7 @@
     "@angular/forms": "17.3.5",
     "rxjs": "7.8.1",
     "tabby-core": "1.0.197-nightly.1",
-    "tabby-terminal": "1.0.197-nightly.1",
-    "tabby-ssh": "1.0.197-nightly.1"
+    "tabby-ssh": "1.0.197-nightly.1",
+    "tabby-terminal": "1.0.197-nightly.1"
   }
 }
