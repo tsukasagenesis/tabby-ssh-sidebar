@@ -10,6 +10,7 @@ import {
     BaseComponent,
     PlatformService,
     HostAppService,
+    Platform,
 } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
 import { Subject } from 'rxjs'
@@ -35,7 +36,7 @@ interface ContextMenuPosition {
 @Component({
     selector: 'ssh-sidebar',
     template: `
-        <div class="ssh-sidebar-container" [class.collapsed]="collapsed">
+        <div class="ssh-sidebar-container" [class.collapsed]="collapsed" [class.macos]="isMacOS">
             <!-- Sidebar Header -->
             <div class="ssh-sidebar-header">
                 <div class="ssh-sidebar-title">
@@ -247,6 +248,11 @@ interface ContextMenuPosition {
             padding: 12px 16px;
             border-bottom: 1px solid var(--bs-border-color);
             background: var(--bs-tertiary-bg);
+        }
+
+        /* macOS traffic lights (window controls) offset */
+        .ssh-sidebar-container.macos .ssh-sidebar-header {
+            padding-top: 40px;
         }
 
         .ssh-sidebar-title {
@@ -494,6 +500,9 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     contextMenuPosition: ContextMenuPosition = { x: 0, y: 0 }
     contextMenuProfile: PartialProfile<SSHProfile> | null = null
 
+    // Platform detection
+    isMacOS = false
+
     private destroy$ = new Subject<void>()
     public sidebarService: any = null  // Will be injected by the service
 
@@ -507,6 +516,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         @Inject(ProfileProvider) private profileProviders: ProfileProvider<Profile>[],
     ) {
         super()
+        this.isMacOS = this.hostApp.platform === Platform.macOS
     }
 
     @HostListener('document:click', ['$event'])
