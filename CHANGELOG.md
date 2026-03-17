@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-03-17
 
 ### Fixed
 - Defensive config/state recovery — all JSON.parse calls wrapped in try/catch with fallback defaults
