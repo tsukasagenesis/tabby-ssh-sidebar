@@ -2,19 +2,19 @@ import { Injectable, ComponentFactoryResolver, ApplicationRef, Injector, Embedde
 import { ConfigService } from 'tabby-core'
 import { SSHSidebarComponent } from '../components/sshSidebar.component'
 
-/**
- * Service to manage the SSH sidebar panel lifecycle and state
- *
- * FLEXBOX APPROACH - sidebar inserted inside app-root as first child,
- * app-root becomes horizontal flex container with sidebar on left
- */
 @Injectable({ providedIn: 'root' })
 export class SSHSidebarService {
     private sidebarComponentRef: ComponentRef<SSHSidebarComponent> | null = null
     private sidebarElement: HTMLElement | null = null
+    private resizeHandle: HTMLElement | null = null
     private styleElement: HTMLStyleElement | null = null
     private isVisible = false
-    private readonly SIDEBAR_WIDTH = 280
+
+    private static readonly DEFAULT_WIDTH = 280
+    private static readonly MIN_WIDTH = 180
+    private static readonly MAX_WIDTH = 600
+
+    private sidebarWidth = SSHSidebarService.DEFAULT_WIDTH
 
     constructor(
         private componentFactoryResolver: ComponentFactoryResolver,
@@ -28,6 +28,7 @@ export class SSHSidebarService {
             return
         }
 
+        this.loadWidth()
         this.createSidebar()
 
         const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
@@ -63,101 +64,131 @@ export class SSHSidebarService {
         return this.isVisible
     }
 
+    get position(): 'left' | 'right' {
+        const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
+        return pluginConfig.position || 'left'
+    }
+
     initialize(): void {
         const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
-        // Open sidebar by default on first startup, or if explicitly set to visible
         if (pluginConfig.sidebarVisible !== false) {
             this.show()
         }
     }
 
+    private loadWidth(): void {
+        const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
+        const raw = pluginConfig.sidebarWidth
+        this.sidebarWidth = (typeof raw === 'number' && raw >= SSHSidebarService.MIN_WIDTH && raw <= SSHSidebarService.MAX_WIDTH)
+            ? raw
+            : SSHSidebarService.DEFAULT_WIDTH
+    }
+
+    private saveWidth(): void {
+        const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
+        pluginConfig.sidebarWidth = this.sidebarWidth
+        this.saveConfig(pluginConfig)
+    }
+
     private createSidebar(): void {
-        // Create component
         const componentFactory = this.componentFactoryResolver.resolveComponentFactory(SSHSidebarComponent)
         this.sidebarComponentRef = componentFactory.create(this.injector)
-
-        // Attach to application
         this.appRef.attachView(this.sidebarComponentRef.hostView)
 
-        // Get DOM element
         const domElem = (this.sidebarComponentRef.hostView as EmbeddedViewRef<any>).rootNodes[0] as HTMLElement
 
-        // Create wrapper that will be inserted into app-root flex container
         const wrapper = document.createElement('div')
         wrapper.className = 'ssh-sidebar-wrapper'
-        wrapper.style.cssText = `
-            width: ${this.SIDEBAR_WIDTH}px;
-            flex: 0 0 ${this.SIDEBAR_WIDTH}px;  /* Don't grow or shrink */
-            display: flex;
-            flex-direction: column;
-            background: var(--bs-body-bg, #1e1e1e);
-            border-right: 1px solid var(--bs-border-color, #333);
-            box-shadow: 2px 0 10px rgba(0,0,0,0.3);
-            z-index: 999;
-        `
 
-        wrapper.appendChild(domElem)
+        // Build wrapper contents based on position
+        const isRight = this.position === 'right'
 
-        // Insert inside app-root as first child (before .content)
+        if (isRight) {
+            // Resize handle on the left side for right-positioned sidebar
+            this.resizeHandle = this.createResizeHandle()
+            wrapper.appendChild(this.resizeHandle)
+            wrapper.appendChild(domElem)
+        } else {
+            wrapper.appendChild(domElem)
+            this.resizeHandle = this.createResizeHandle()
+            wrapper.appendChild(this.resizeHandle)
+        }
+
         const appRoot = document.querySelector('app-root')
         if (!appRoot) {
             console.error('SSH Sidebar: Could not find app-root element')
             return
         }
 
-        // Insert as first child
-        appRoot.insertBefore(wrapper, appRoot.firstChild)
-
-        this.sidebarElement = wrapper
-
-        // Inject CSS to make app-root a flex container
-        this.injectLayoutCSS()
-
-        // Directly manipulate .content element's style to remove width: 100vw
-        // There are multiple .content elements - target the deeper nested one
-        const contentElements = appRoot.querySelectorAll('.content')
-        if (contentElements.length > 1) {
-            // Select the second (deeper) .content element
-            const contentElement = contentElements[1] as HTMLElement
-            contentElement.style.width = 'auto'
-            contentElement.style.flex = '1 1 auto'
-            contentElement.style.minWidth = '0'
-        } else if (contentElements.length === 1) {
-            // Fallback to first one if only one exists
-            const contentElement = contentElements[0] as HTMLElement
-            contentElement.style.width = 'auto'
-            contentElement.style.flex = '1 1 auto'
-            contentElement.style.minWidth = '0'
+        if (isRight) {
+            appRoot.appendChild(wrapper)
+        } else {
+            appRoot.insertBefore(wrapper, appRoot.firstChild)
         }
 
-        // Inject service reference into component so it can call hide()
+        this.sidebarElement = wrapper
+        this.injectLayoutCSS()
+        this.setupResizeListeners()
+
         if (this.sidebarComponentRef) {
             const component = this.sidebarComponentRef.instance
             component.sidebarService = this
         }
     }
 
-    private destroySidebar(): void {
-        // Restore .content element's original styles
-        const appRoot = document.querySelector('app-root')
-        if (appRoot) {
-            const contentElements = appRoot.querySelectorAll('.content')
-            if (contentElements.length > 1) {
-                // Restore the second (deeper) .content element
-                const contentElement = contentElements[1] as HTMLElement
-                contentElement.style.removeProperty('width')
-                contentElement.style.removeProperty('flex')
-                contentElement.style.removeProperty('min-width')
-            } else if (contentElements.length === 1) {
-                // Fallback to first one
-                const contentElement = contentElements[0] as HTMLElement
-                contentElement.style.removeProperty('width')
-                contentElement.style.removeProperty('flex')
-                contentElement.style.removeProperty('min-width')
-            }
-        }
+    private createResizeHandle(): HTMLElement {
+        const handle = document.createElement('div')
+        handle.className = 'ssh-sidebar-resize-handle'
+        return handle
+    }
 
-        // Remove injected CSS
+    // Stable references for resize listeners — avoids memory leak from per-mousedown closures
+    private resizeStartX = 0
+    private resizeStartWidth = 0
+    private resizeIsRight = false
+    private boundOnMouseMove = this.onResizeMouseMove.bind(this)
+    private boundOnMouseUp = this.onResizeMouseUp.bind(this)
+
+    private setupResizeListeners(): void {
+        if (!this.resizeHandle || !this.sidebarElement) return
+        this.resizeIsRight = this.position === 'right'
+
+        this.resizeHandle.addEventListener('mousedown', (e: MouseEvent) => {
+            e.preventDefault()
+            this.resizeStartX = e.clientX
+            this.resizeStartWidth = this.sidebarWidth
+            document.body.style.cursor = 'col-resize'
+            document.body.style.userSelect = 'none'
+            document.addEventListener('mousemove', this.boundOnMouseMove)
+            document.addEventListener('mouseup', this.boundOnMouseUp)
+        })
+    }
+
+    private onResizeMouseMove(e: MouseEvent): void {
+        const delta = this.resizeIsRight ? (this.resizeStartX - e.clientX) : (e.clientX - this.resizeStartX)
+        this.sidebarWidth = Math.min(
+            SSHSidebarService.MAX_WIDTH,
+            Math.max(SSHSidebarService.MIN_WIDTH, this.resizeStartWidth + delta)
+        )
+        this.updateSidebarWidth()
+    }
+
+    private onResizeMouseUp(): void {
+        document.removeEventListener('mousemove', this.boundOnMouseMove)
+        document.removeEventListener('mouseup', this.boundOnMouseUp)
+        document.body.style.removeProperty('cursor')
+        document.body.style.removeProperty('user-select')
+        this.saveWidth()
+    }
+
+    private updateSidebarWidth(): void {
+        if (this.sidebarElement) {
+            this.sidebarElement.style.width = `${this.sidebarWidth}px`
+            this.sidebarElement.style.flex = `0 0 ${this.sidebarWidth}px`
+        }
+    }
+
+    private destroySidebar(): void {
         this.removeLayoutCSS()
 
         if (this.sidebarComponentRef) {
@@ -170,14 +201,15 @@ export class SSHSidebarService {
             this.sidebarElement.remove()
             this.sidebarElement = null
         }
+
+        this.resizeHandle = null
     }
 
     private injectLayoutCSS(): void {
-        // Make app-root a horizontal flex container to hold sidebar and content
+        const isRight = this.position === 'right'
         const style = document.createElement('style')
         style.id = 'ssh-sidebar-layout-css'
         style.textContent = `
-            /* Make app-root a horizontal flex container */
             app-root {
                 display: flex !important;
                 flex-direction: row !important;
@@ -186,15 +218,40 @@ export class SSHSidebarService {
                 overflow: hidden !important;
             }
 
-            /* Override Tabby's width: 100vw on .content - use calc to force correct width */
-            app-root > .content,
-            app-root > div.content,
-            app-root > .content[class],
-            app-root > [class*="content"] {
-                flex: 1 1 auto !important;
-                width: 0 !important;  /* Set to 0, let flex grow it */
-                max-width: 100% !important;
-                min-width: 0 !important;
+            .ssh-sidebar-wrapper {
+                width: ${this.sidebarWidth}px;
+                flex: 0 0 ${this.sidebarWidth}px;
+                display: flex;
+                flex-direction: row;
+                background: var(--bs-body-bg);
+                ${isRight ? 'border-left' : 'border-right'}: 1px solid var(--bs-border-color);
+                box-shadow: ${isRight ? '-2px' : '2px'} 0 10px rgba(0, 0, 0, 0.3);
+                z-index: 999;
+            }
+
+            .ssh-sidebar-wrapper > :host,
+            .ssh-sidebar-wrapper > ssh-sidebar {
+                flex: 1;
+                min-width: 0;
+            }
+
+            .ssh-sidebar-resize-handle {
+                width: 4px;
+                cursor: col-resize;
+                background: transparent;
+                flex-shrink: 0;
+                transition: background 0.2s ease;
+            }
+
+            .ssh-sidebar-resize-handle:hover {
+                background: var(--bs-primary);
+            }
+
+            app-root > .content {
+                flex: 1 1 auto;
+                width: 0 !important;
+                max-width: 100%;
+                min-width: 0;
             }
         `
 

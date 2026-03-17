@@ -1,41 +1,24 @@
-import { Component, OnInit, OnDestroy, HostBinding, Inject, HostListener } from '@angular/core'
+import { Component, OnInit, OnDestroy, HostBinding, HostListener, ViewChild, ElementRef } from '@angular/core'
 import {
     ProfilesService,
     AppService,
     ConfigService,
-    TranslateService,
+    NotificationsService,
     Profile,
     PartialProfile,
-    ProfileProvider,
     BaseComponent,
-    PlatformService,
-    HostAppService,
 } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
 import { Subject } from 'rxjs'
 import { takeUntil, debounceTime } from 'rxjs/operators'
-import deepClone from 'clone-deep'
+import { ProfileGroup } from './profileGroup.component'
+import { ContextMenuPosition } from './contextMenu.component'
+import { formatTimeAgo, matchesProfileFilter } from '../utils'
 
-interface ProfileGroup {
-    id: string
-    name: string
-    profiles: PartialProfile<SSHProfile>[]
-    collapsed: boolean
-}
-
-interface ContextMenuPosition {
-    x: number
-    y: number
-}
-
-/**
- * Persistent sidebar component that displays SSH connections
- * UI adapted from Tabby's ProfilesSettingsTab component
- */
 @Component({
     selector: 'ssh-sidebar',
     template: `
-        <div class="ssh-sidebar-container" [class.collapsed]="collapsed">
+        <div class="ssh-sidebar-container" [class.collapsed]="collapsed" tabindex="0">
             <!-- Sidebar Header -->
             <div class="ssh-sidebar-header">
                 <div class="ssh-sidebar-title">
@@ -84,6 +67,17 @@ interface ContextMenuPosition {
                 </div>
             </div>
 
+            <!-- Tag Filter -->
+            <div class="ssh-sidebar-tags" *ngIf="allTags.length > 0">
+                <button class="tag-filter-btn"
+                        [class.active]="activeTagFilter === null"
+                        (click)="setTagFilter(null)">All</button>
+                <button class="tag-filter-btn"
+                        *ngFor="let tag of allTags"
+                        [class.active]="activeTagFilter === tag"
+                        (click)="setTagFilter(tag)">{{ tag }}</button>
+            </div>
+
             <!-- Search Box -->
             <div class="ssh-sidebar-search">
                 <div class="input-group">
@@ -91,68 +85,34 @@ interface ContextMenuPosition {
                         <i class="fas fa-fw fa-search"></i>
                     </span>
                     <input
+                        #searchInput
                         type="search"
                         class="form-control"
-                        placeholder="Filter"
+                        placeholder="Filter (/ to focus)"
                         [(ngModel)]="filter"
                         (input)="refreshFilteredProfiles()"
+                        (keydown.escape)="blurSearch()"
+                        (keydown.arrowDown)="onSearchArrowDown($event)"
                     >
                 </div>
             </div>
 
-            <!-- Profiles List (Tabby-style) -->
+            <!-- Profiles List -->
             <div class="ssh-sidebar-list list-group">
                 <ng-container *ngFor="let group of profileGroups">
-                    <ng-container *ngIf="isGroupVisible(group)">
-                        <!-- Group Header -->
-                        <div class="list-group-item list-group-item-action d-flex align-items-center group-header"
-                             (click)="toggleGroupCollapse(group)">
-                            <i class="fa fa-fw fa-chevron-right" *ngIf="group.collapsed && group.profiles.length > 0"></i>
-                            <i class="fa fa-fw fa-chevron-down" *ngIf="!group.collapsed && group.profiles.length > 0"></i>
-                            <span class="ms-2 me-auto">{{ group.name }}</span>
-                            <span class="badge bg-secondary">{{ group.profiles.length }}</span>
-                        </div>
-
-                        <!-- Group Profiles -->
-                        <ng-container *ngIf="!group.collapsed">
-                            <ng-container *ngFor="let profile of group.profiles">
-                                <div class="list-group-item profile-item d-flex align-items-center"
-                                     *ngIf="isProfileVisible(profile)"
-                                     [class.active]="isActiveConnection(profile)"
-                                     (click)="launchProfile(profile)"
-                                     (contextmenu)="onProfileContextMenu($event, profile)">
-
-                                    <!-- Profile Icon -->
-                                    <profile-icon
-                                        [icon]="profile.icon"
-                                        [color]="profile.color">
-                                    </profile-icon>
-
-                                    <!-- Profile Name & Description -->
-                                    <div class="profile-info">
-                                        <div class="profile-name">{{ profile.name }}</div>
-                                        <div class="profile-desc text-muted" *ngIf="getDescription(profile)">
-                                            {{ getDescription(profile) }}
-                                        </div>
-                                    </div>
-
-                                    <div class="me-auto"></div>
-
-                                    <!-- Launch Button -->
-                                    <button class="btn btn-link btn-sm hover-reveal ms-1"
-                                            (click)="$event.stopPropagation(); launchProfile(profile)"
-                                            title="Launch connection">
-                                        <i class="fas fa-play"></i>
-                                    </button>
-
-                                    <!-- Type Badge -->
-                                    <span class="ms-1 badge" [ngClass]="'text-bg-' + getTypeColorClass(profile)">
-                                        {{ getTypeLabel(profile) }}
-                                    </span>
-                                </div>
-                            </ng-container>
-                        </ng-container>
-                    </ng-container>
+                    <ssh-profile-group
+                        *ngIf="isGroupVisible(group)"
+                        [group]="group"
+                        [filter]="filter"
+                        [activeProfileIds]="activeProfileIds"
+                        [focusedProfileId]="getFocusedProfileId()"
+                        [profileStats]="profileStats"
+                        [activeTagFilter]="activeTagFilter"
+                        [profileTags]="profileTags"
+                        (collapseToggled)="onGroupCollapseToggled($event)"
+                        (profileLaunched)="launchProfile($event)"
+                        (profileContextMenu)="onProfileContextMenu($event)">
+                    </ssh-profile-group>
                 </ng-container>
 
                 <!-- Empty State -->
@@ -169,60 +129,22 @@ interface ContextMenuPosition {
             </div>
 
             <!-- Context Menu -->
-            <div class="context-menu"
-                 *ngIf="contextMenuVisible"
-                 [style.left.px]="contextMenuPosition.x"
-                 [style.top.px]="contextMenuPosition.y">
-                <div class="context-menu-item" (click)="contextMenuLaunch()">
-                    <i class="fas fa-fw fa-play"></i>
-                    <span>Launch</span>
-                </div>
-                <div class="context-menu-item" (click)="contextMenuEdit()">
-                    <i class="fas fa-fw fa-edit"></i>
-                    <span>Edit</span>
-                </div>
-                <div class="context-menu-item" (click)="contextMenuDuplicate()">
-                    <i class="fas fa-fw fa-copy"></i>
-                    <span>Duplicate</span>
-                </div>
-                <div class="context-menu-item" (click)="contextMenuCopySSHCommand()">
-                    <i class="fas fa-fw fa-terminal"></i>
-                    <span>Copy SSH Command</span>
-                </div>
-                <div class="context-menu-divider"></div>
-                <div class="context-menu-item"
-                     *ngIf="contextMenuProfile && contextMenuProfile.id && !isProfileBlacklisted(contextMenuProfile)"
-                     (click)="contextMenuBlacklist()">
-                    <i class="fas fa-fw fa-eye-slash"></i>
-                    <span>Hide from Selector</span>
-                </div>
-                <div class="context-menu-item"
-                     *ngIf="contextMenuProfile && contextMenuProfile.id && isProfileBlacklisted(contextMenuProfile)"
-                     (click)="contextMenuUnblacklist()">
-                    <i class="fas fa-fw fa-eye"></i>
-                    <span>Show in Selector</span>
-                </div>
-                <div class="context-menu-divider"></div>
-                <div class="context-menu-item"
-                     *ngIf="contextMenuProfile && contextMenuProfile.id && !isProfilePinned(contextMenuProfile)"
-                     (click)="contextMenuPin()">
-                    <i class="fas fa-fw fa-thumbtack"></i>
-                    <span>Pin to Favorites</span>
-                </div>
-                <div class="context-menu-item"
-                     *ngIf="contextMenuProfile && contextMenuProfile.id && isProfilePinned(contextMenuProfile)"
-                     (click)="contextMenuUnpin()">
-                    <i class="fas fa-fw fa-thumbtack" style="transform: rotate(45deg);"></i>
-                    <span>Unpin from Favorites</span>
-                </div>
-                <div class="context-menu-divider"></div>
-                <div class="context-menu-item context-menu-item-danger"
-                     *ngIf="contextMenuProfile && !contextMenuProfile.isBuiltin"
-                     (click)="contextMenuDelete()">
-                    <i class="fas fa-fw fa-trash-alt"></i>
-                    <span>Delete</span>
-                </div>
-            </div>
+            <ssh-context-menu
+                [visible]="contextMenuVisible"
+                [position]="contextMenuPosition"
+                [profile]="contextMenuProfile"
+                [isPinned]="contextMenuProfile ? isProfilePinned(contextMenuProfile) : false"
+                [profileTags]="contextMenuProfile?.id ? (profileTags[contextMenuProfile.id] || []) : []"
+                [allTags]="allTags"
+                (closed)="contextMenuVisible = false"
+                (profileLaunched)="launchProfile($event)"
+                (profileDuplicated)="refreshProfiles()"
+                (profileDeleted)="refreshProfiles()"
+                (profilePinned)="onProfilePinned($event)"
+                (profileUnpinned)="onProfileUnpinned($event)"
+                (tagAdded)="onTagAdded($event)"
+                (tagRemoved)="onTagRemoved($event)">
+            </ssh-context-menu>
         </div>
     `,
     styles: [`
@@ -304,7 +226,37 @@ interface ContextMenuPosition {
         .ssh-sidebar-sort .btn.active {
             opacity: 1;
             background: var(--bs-primary);
-            color: white;
+            color: var(--bs-white, #fff);
+            border-color: var(--bs-primary);
+        }
+
+        .ssh-sidebar-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--bs-border-color);
+        }
+
+        .tag-filter-btn {
+            padding: 2px 10px;
+            font-size: 11px;
+            border: 1px solid var(--bs-border-color);
+            border-radius: 12px;
+            background: var(--bs-body-bg);
+            color: var(--bs-secondary-color);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tag-filter-btn:hover {
+            background: var(--bs-tertiary-bg);
+            color: var(--bs-body-color);
+        }
+
+        .tag-filter-btn.active {
+            background: var(--bs-primary);
+            color: var(--bs-white, #fff);
             border-color: var(--bs-primary);
         }
 
@@ -346,81 +298,6 @@ interface ContextMenuPosition {
             font-size: 12px;
         }
 
-        /* Group Header Styling */
-        .group-header {
-            background: var(--bs-tertiary-bg);
-            font-weight: 600;
-            font-size: 13px;
-            cursor: pointer;
-            padding: 10px 16px;
-        }
-
-        .group-header:hover {
-            background: var(--bs-secondary-bg);
-        }
-
-        /* Profile Item Styling */
-        .profile-item {
-            padding: 10px 12px 10px 12px;
-            cursor: pointer;
-            border-left: 3px solid transparent;
-            transition: all 0.2s ease;
-        }
-
-        .profile-item:hover {
-            background: var(--bs-tertiary-bg);
-        }
-
-        .profile-item.active {
-            background: var(--bs-primary-bg-subtle);
-            border-left-color: var(--bs-primary);
-        }
-
-        /* Profile Info */
-        .profile-info {
-            flex: 1;
-            min-width: 0;
-            margin-left: 8px;
-        }
-
-        .profile-name {
-            font-weight: 500;
-            font-size: 13px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .profile-desc {
-            font-size: 11px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        /* Profile Icon Sizing */
-        profile-icon {
-            width: 1.25rem;
-            flex-shrink: 0;
-        }
-
-        /* Hover Reveal Buttons */
-        .hover-reveal {
-            opacity: 0;
-            transition: opacity 0.2s ease;
-        }
-
-        .profile-item:hover .hover-reveal {
-            opacity: 1;
-        }
-
-        /* Badge Styling */
-        .badge {
-            font-size: 9px;
-            padding: 2px 6px;
-        }
-
-        /* Button Styling */
         .btn-link {
             color: var(--bs-body-color);
             text-decoration: none;
@@ -430,51 +307,8 @@ interface ContextMenuPosition {
             color: var(--bs-primary);
         }
 
-        /* Context Menu Styling */
-        .context-menu {
-            position: fixed;
-            background: var(--bs-body-bg);
-            border: 1px solid var(--bs-border-color);
-            border-radius: 6px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            z-index: 10000;
-            min-width: 200px;
-            padding: 4px 0;
-            font-size: 13px;
-        }
-
-        .context-menu-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 16px;
-            cursor: pointer;
-            transition: background 0.2s ease;
-            color: var(--bs-body-color);
-        }
-
-        .context-menu-item:hover {
-            background: var(--bs-tertiary-bg);
-        }
-
-        .context-menu-item-danger {
-            color: var(--bs-danger);
-        }
-
-        .context-menu-item-danger:hover {
-            background: var(--bs-danger);
-            color: white;
-        }
-
-        .context-menu-item i {
-            width: 14px;
-            text-align: center;
-        }
-
-        .context-menu-divider {
-            height: 1px;
-            background: var(--bs-border-color);
-            margin: 4px 0;
+        .ssh-sidebar-container:focus {
+            outline: none;
         }
     `]
 })
@@ -487,47 +321,45 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     collapsed = false
     configGroups: any[] = []
     sortBy: 'name' | 'host' | 'recent' = 'name'
-    pinnedProfiles: string[] = [] // Array of profile IDs
+    pinnedProfiles: string[] = []
+    activeProfileIds: string[] = []
+    profileStats: { [id: string]: { lastConnected: number, connectionCount: number } } = {}
+    profileTags: { [id: string]: string[] } = {}
+    allTags: string[] = []
+    activeTagFilter: string | null = null
 
     // Context menu state
     contextMenuVisible = false
     contextMenuPosition: ContextMenuPosition = { x: 0, y: 0 }
     contextMenuProfile: PartialProfile<SSHProfile> | null = null
 
+    // Keyboard navigation
+    focusedProfileIndex = -1
+
+    @ViewChild('searchInput') searchInput!: ElementRef<HTMLInputElement>
+
     private destroy$ = new Subject<void>()
-    public sidebarService: any = null  // Will be injected by the service
+    private saveTimer: any = null
+    public sidebarService: any = null
 
     constructor(
         private profiles: ProfilesService,
         private app: AppService,
         private config: ConfigService,
-        private translate: TranslateService,
-        private platform: PlatformService,
-        private hostApp: HostAppService,
-        @Inject(ProfileProvider) private profileProviders: ProfileProvider<Profile>[],
+        private notifications: NotificationsService,
     ) {
         super()
     }
 
-    @HostListener('document:click', ['$event'])
-    onDocumentClick(event: MouseEvent): void {
-        // Close context menu when clicking outside
-        this.contextMenuVisible = false
-    }
-
     async ngOnInit(): Promise<void> {
-        // Load config groups
         this.configGroups = this.config.store.groups || []
-
-        // Load pinned profiles
         this.loadPinnedProfiles()
+        this.loadProfileStats()
+        this.loadProfileTags()
 
         await this.refreshProfiles()
         await this.refreshProfileGroups()
 
-        // Watch for config changes (profiles added/deleted/modified)
-        // Config changes include profile edits, additions, and deletions
-        // Debounce to avoid multiple rapid refreshes
         this.config.changed$
             .pipe(
                 takeUntil(this.destroy$),
@@ -539,14 +371,12 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
                 await this.refreshProfileGroups()
             })
 
-        // Watch for tab changes to update active connection indicators
         this.app.tabsChanged$
             .pipe(takeUntil(this.destroy$))
             .subscribe(() => {
-                // Force change detection for active state
+                this.updateActiveProfileIds()
             })
 
-        // Load collapsed state from config
         const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
         this.collapsed = pluginConfig.sidebarCollapsed || false
     }
@@ -557,36 +387,32 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     async refreshProfiles(): Promise<void> {
-        const allProfiles = await this.profiles.getProfiles()
-        this.sshProfiles = allProfiles.filter(p => {
-            // Only include SSH profiles
-            if (p.type !== 'ssh') {
-                return false
-            }
-
-            // Exclude template profiles
-            if (p.isTemplate) {
-                return false
-            }
-
-            // Exclude profiles without a host
-            const sshProfile = p as PartialProfile<SSHProfile>
-            if (!sshProfile.options?.host) {
-                return false
-            }
-
-            return true
-        }) as PartialProfile<SSHProfile>[]
-        await this.refreshProfileGroups()
+        this.focusedProfileIndex = -1
+        try {
+            const allProfiles = await this.profiles.getProfiles()
+            this.sshProfiles = allProfiles.filter(p => {
+                if (p.type !== 'ssh') return false
+                if (p.isTemplate) return false
+                const sshProfile = p as PartialProfile<SSHProfile>
+                if (!sshProfile.options?.host) return false
+                return true
+            }) as PartialProfile<SSHProfile>[]
+            this.updateActiveProfileIds()
+            await this.refreshProfileGroups()
+        } catch (error) {
+            this.notifications.error(
+                'Could not load SSH profiles',
+                error instanceof Error ? error.message : 'Try restarting Tabby'
+            )
+        }
     }
 
     async refreshProfileGroups(): Promise<void> {
-        const profileGroupCollapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}')
+        let profileGroupCollapsed: Record<string, boolean> = {}
+        try { profileGroupCollapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}') } catch { /* corrupted, use defaults */ }
 
-        // Sort profiles first
         await this.sortProfiles()
 
-        // Group profiles by their group property
         const grouped: { [key: string]: PartialProfile<SSHProfile>[] } = {}
 
         for (const profile of this.sshProfiles) {
@@ -597,11 +423,9 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             grouped[groupId].push(profile)
         }
 
-        // Convert to ProfileGroup array
         this.profileGroups = Object.entries(grouped).map(([groupId, profiles]) => {
             let groupName = groupId
             if (groupId !== 'ungrouped') {
-                // Try to resolve group ID to name from config
                 const configGroup = this.configGroups.find(g => g.id === groupId)
                 if (configGroup) {
                     groupName = configGroup.name
@@ -618,36 +442,31 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             }
         })
 
-        // Add Favorites group at the top if there are pinned profiles
         if (this.pinnedProfiles.length > 0) {
             const pinnedProfileObjects = this.sshProfiles.filter(p =>
                 p.id && this.pinnedProfiles.includes(p.id)
             )
 
             if (pinnedProfileObjects.length > 0) {
-                // Remove pinned profiles from other groups
                 this.profileGroups.forEach(group => {
                     group.profiles = group.profiles.filter(p =>
                         !p.id || !this.pinnedProfiles.includes(p.id)
                     )
                 })
 
-                // Add Favorites group at the beginning
                 this.profileGroups.unshift({
                     id: 'favorites',
-                    name: '⭐ Favorites',
+                    name: '\u2B50 Favorites',
                     profiles: pinnedProfileObjects,
                     collapsed: profileGroupCollapsed['favorites'] ?? false,
                 })
             }
         }
 
-        // Remove empty groups
         this.profileGroups = this.profileGroups.filter(group =>
             group.profiles.length > 0
         )
 
-        // Sort groups: favorites first, ungrouped second, then alphabetically
         this.profileGroups.sort((a, b) => {
             if (a.id === 'favorites') return -1
             if (b.id === 'favorites') return 1
@@ -659,30 +478,34 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
 
     async sortProfiles(): Promise<void> {
         if (this.sortBy === 'recent') {
-            // Use Tabby's built-in recent profiles tracking
+            // Use Tabby's recent list as primary, our persistent stats as fallback
             const recentProfiles = await this.profiles.getRecentProfiles()
             const recentIds = recentProfiles.map(p => p.id)
 
             this.sshProfiles.sort((a, b) => {
-                // Active connections always come first
-                const aActive = this.isActiveConnection(a)
-                const bActive = this.isActiveConnection(b)
+                // Active connections first
+                const aActive = this.activeProfileIds.includes(a.id || '')
+                const bActive = this.activeProfileIds.includes(b.id || '')
                 if (aActive && !bActive) return -1
                 if (!aActive && bActive) return 1
 
-                // Then sort by Tabby's recent profiles order
+                // Tabby's recent list
                 const aIndex = recentIds.indexOf(a.id)
                 const bIndex = recentIds.indexOf(b.id)
-
-                if (aIndex !== -1 && bIndex !== -1) {
-                    return aIndex - bIndex
-                }
+                if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex
                 if (aIndex !== -1) return -1
                 if (bIndex !== -1) return 1
+
+                // Persistent stats fallback (survives restarts)
+                const aStats = this.profileStats[a.id || '']
+                const bStats = this.profileStats[b.id || '']
+                const aTime = aStats?.lastConnected || 0
+                const bTime = bStats?.lastConnected || 0
+                if (aTime !== bTime) return bTime - aTime
+
                 return a.name.localeCompare(b.name)
             })
         } else {
-            // Synchronous sorting for name and host
             this.sshProfiles.sort((a, b) => {
                 switch (this.sortBy) {
                     case 'name':
@@ -704,95 +527,33 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     refreshFilteredProfiles(): void {
-        // Filter is applied in the template via isProfileVisible
+        this.focusedProfileIndex = -1
     }
 
     isGroupVisible(group: ProfileGroup): boolean {
-        return !this.filter || group.profiles.some(x => this.isProfileVisible(x))
+        return group.profiles.some(p => this.isProfileFullyVisible(p, group))
     }
 
-    isProfileVisible(profile: PartialProfile<Profile>): boolean {
-        if (!this.filter) {
-            return true
+    isProfileFullyVisible(profile: PartialProfile<SSHProfile>, group?: ProfileGroup): boolean {
+        // Tag filter
+        if (this.activeTagFilter) {
+            const tags = this.profileTags[profile.id || ''] || []
+            if (!tags.includes(this.activeTagFilter)) return false
         }
-        const searchText = (profile.name + '$' + (this.getDescription(profile) ?? '')).toLowerCase()
-        return searchText.includes(this.filter.toLowerCase())
+        // Text filter
+        if (!this.filter) return true
+        const filterLower = this.filter.toLowerCase()
+        if (group && group.name.toLowerCase().includes(filterLower)) return true
+        return this.matchesFilter(profile, filterLower)
     }
 
     hasVisibleProfiles(): boolean {
-        return this.profileGroups.some(g => this.isGroupVisible(g))
-    }
-
-    getDescription(profile: PartialProfile<Profile>): string | null {
-        // Try to use ProfilesService method if available, otherwise construct manually
-        if (this.profiles.getDescription) {
-            return this.profiles.getDescription(profile)
-        }
-
-        // Fallback: construct description for SSH profiles
-        const sshProfile = profile as PartialProfile<SSHProfile>
-        if (sshProfile.options) {
-            const user = sshProfile.options.user || 'root'
-            const host = sshProfile.options.host || 'unknown'
-            const port = sshProfile.options.port || 22
-            return `${user}@${host}${port !== 22 ? ':' + port : ''}`
-        }
-        return null
-    }
-
-    getTypeLabel(profile: PartialProfile<Profile>): string {
-        const provider = this.profiles.providerForProfile(profile)
-        const name = provider?.name
-        if (name === 'Local terminal') {
-            return ''
-        }
-        return name ? this.translate.instant(name) : this.translate.instant('Unknown')
-    }
-
-    getTypeColorClass(profile: PartialProfile<Profile>): string {
-        const provider = this.profiles.providerForProfile(profile)
-        return {
-            ssh: 'secondary',
-            serial: 'success',
-            telnet: 'info',
-            'split-layout': 'primary',
-        }[provider?.id ?? ''] ?? 'warning'
-    }
-
-    toggleGroupCollapse(group: ProfileGroup): void {
-        if (group.profiles.length === 0) {
-            return
-        }
-        group.collapsed = !group.collapsed
-        this.saveProfileGroupCollapse(group)
-    }
-
-    launchProfile(profile: PartialProfile<Profile>): void {
-        if (this.profiles.openNewTabForProfile) {
-            this.profiles.openNewTabForProfile(profile)
-        } else {
-            // Fallback to launchProfile method
-            (this.profiles as any).launchProfile(profile)
-        }
-    }
-
-    isActiveConnection(profile: PartialProfile<SSHProfile>): boolean {
-        // Check if there's an active tab with this profile
-        return this.app.tabs.some(tab => {
-            const tabProfile = (tab as any).profile
-            return tabProfile &&
-                   tabProfile.type === 'ssh' &&
-                   tabProfile.id === profile.id
-        })
-    }
-
-    isProfileBlacklisted(profile: PartialProfile<Profile>): boolean {
-        return profile.id && this.config.store.profileBlacklist.includes(profile.id)
+        return this.profileGroups.some(g => g.profiles.some(p => this.isProfileFullyVisible(p, g)))
     }
 
     getConnectionCountText(): string {
         const total = this.sshProfiles.length
-        const active = this.sshProfiles.filter(p => this.isActiveConnection(p)).length
+        const active = this.activeProfileIds.length
 
         if (active === 0) {
             return `${total} connection${total !== 1 ? 's' : ''}`
@@ -801,274 +562,181 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     toggleCollapse(): void {
-        // If the service is available, use it to hide the sidebar completely
         if (this.sidebarService) {
             this.sidebarService.hide()
         } else {
-            // Fallback: just collapse internally
             this.collapsed = !this.collapsed
-
-            // Save state to config
             const pluginConfig = this.config.store.pluginConfig || {}
             if (!pluginConfig['ssh-sidebar']) {
                 pluginConfig['ssh-sidebar'] = {}
             }
             pluginConfig['ssh-sidebar'].sidebarCollapsed = this.collapsed
             this.config.store.pluginConfig = pluginConfig
-            this.config.save()
+            this.scheduleSave()
         }
     }
 
-    // Context Menu Methods
-    onProfileContextMenu(event: MouseEvent, profile: PartialProfile<SSHProfile>): void {
-        event.preventDefault()
-        event.stopPropagation()
-
-        this.contextMenuProfile = profile
-        this.contextMenuPosition = {
-            x: event.clientX,
-            y: event.clientY,
+    launchProfile(profile: PartialProfile<Profile>): void {
+        if (profile.id) {
+            this.recordProfileLaunch(profile.id)
         }
-        this.contextMenuVisible = true
-    }
-
-    contextMenuLaunch(): void {
-        if (this.contextMenuProfile) {
-            this.launchProfile(this.contextMenuProfile)
+        if (this.profiles.openNewTabForProfile) {
+            this.profiles.openNewTabForProfile(profile)
+        } else {
+            (this.profiles as any).launchProfile(profile)
         }
-        this.contextMenuVisible = false
-    }
-
-    async contextMenuEdit(): Promise<void> {
-        if (!this.contextMenuProfile) {
-            this.contextMenuVisible = false
-            return
-        }
-
-        const profileToEdit = this.contextMenuProfile
-        const profileName = profileToEdit.name
-        const profileId = profileToEdit.id
-
-        try {
-            // Use Tabby's pattern for opening settings with profiles tab
-            const { SettingsTabComponent } = window['nodeRequire']('tabby-settings')
-
-            // Check if a settings tab is already open
-            const existingSettingsTab = this.app.tabs.find(tab => tab instanceof SettingsTabComponent)
-
-            if (existingSettingsTab) {
-                // Reuse existing settings tab
-                console.log('Reusing existing settings tab')
-                this.app.selectTab(existingSettingsTab)
-
-                // Switch to profiles tab if not already there
-                const settingsComponent = existingSettingsTab as any
-                if (settingsComponent.activeTab !== 'profiles') {
-                    settingsComponent.activeTab = 'profiles'
-                }
-            } else {
-                // Open new settings tab
-                console.log('Opening new settings tab')
-                this.app.openNewTabRaw({
-                    type: SettingsTabComponent,
-                    inputs: { activeTab: 'profiles' },
-                })
-            }
-
-            // Wait for the settings tab to render
-            await new Promise(resolve => setTimeout(resolve, 500))
-
-            // Try to find and click the profile element in the settings tab
-            // The ProfilesSettingsTab renders profiles as clickable list items
-            // Structure: .list-group-item.ps-5 (profile item, has padding-start: 5)
-            //   - Click on the main element triggers editProfile()
-            //   - DO NOT click on the .fa-play button (that launches the profile)
-            let clicked = false
-
-            // Try multiple times with increasing delays to handle async rendering
-            for (let attempt = 0; attempt < 5 && !clicked; attempt++) {
-                if (attempt > 0) {
-                    await new Promise(resolve => setTimeout(resolve, 200))
-                }
-
-                // Find profile list items - they have .ps-5 class (padding-start: 5rem)
-                // This distinguishes them from group headers
-                const profileElements = document.querySelectorAll('.list-group-item.ps-5')
-
-                for (const element of Array.from(profileElements)) {
-                    const textContent = element.textContent || ''
-
-                    // Check if this element contains our profile name
-                    if (textContent.includes(profileName)) {
-                        console.log(`Found profile element for "${profileName}", attempting click...`)
-
-                        // Make sure we're clicking on the main element, not a button
-                        // The template structure has the profile name in a .no-wrap div
-                        const nameElement = element.querySelector('.no-wrap')
-
-                        if (nameElement && nameElement.textContent?.trim() === profileName) {
-                            console.log(`Exact match found, clicking on profile name element...`)
-
-                            try {
-                                // Click on the name element (guaranteed to trigger editProfile)
-                                const clickable = nameElement as HTMLElement
-                                clickable.click()
-                                console.log(`Clicked profile name for "${profileName}"`)
-                                clicked = true
-                                break
-                            } catch (err) {
-                                console.debug('Error clicking name element, trying main element:', err)
-
-                                // Fallback: click on the main list item
-                                try {
-                                    (element as HTMLElement).click()
-                                    console.log(`Clicked main element for "${profileName}"`)
-                                    clicked = true
-                                    break
-                                } catch (err2) {
-                                    console.debug('Error clicking main element:', err2)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (clicked) {
-                console.log('Successfully triggered profile edit by simulating click')
-            } else {
-                console.warn('Could not find profile element to click')
-                console.info(`Please manually click on "${profileName}" in the profiles list to edit it`)
-            }
-        } catch (error) {
-            console.error('Failed to open settings or trigger edit:', error)
-        }
-
-        this.contextMenuVisible = false
-    }
-
-    async contextMenuDuplicate(): Promise<void> {
-        if (!this.contextMenuProfile) {
-            this.contextMenuVisible = false
-            return
-        }
-
-        const baseProfile: PartialProfile<Profile> = deepClone(this.contextMenuProfile)
-        delete baseProfile.id
-        baseProfile.name = this.translate.instant('{name} copy', this.contextMenuProfile)
-        baseProfile.isBuiltin = false
-        baseProfile.isTemplate = false
-
-        // Write the new profile
-        this.config.store.profiles = this.config.store.profiles || []
-        this.config.store.profiles.push(baseProfile)
-        await this.config.save()
-
-        // Refresh the profile list
-        await this.refreshProfiles()
-
-        this.contextMenuVisible = false
-    }
-
-    contextMenuCopySSHCommand(): void {
-        if (!this.contextMenuProfile) {
-            this.contextMenuVisible = false
-            return
-        }
-
-        const profile = this.contextMenuProfile
-        const user = profile.options?.user || 'root'
-        const host = profile.options?.host || 'unknown'
-        const port = profile.options?.port || 22
-
-        let command = `ssh ${user}@${host}`
-        if (port !== 22) {
-            command += ` -p ${port}`
-        }
-
-        // Copy to clipboard
-        this.platform.setClipboard({ text: command })
-
-        this.contextMenuVisible = false
-    }
-
-    contextMenuBlacklist(): void {
-        if (this.contextMenuProfile && this.contextMenuProfile.id) {
-            this.config.store.profileBlacklist = [...this.config.store.profileBlacklist, this.contextMenuProfile.id]
-            this.config.save()
-        }
-        this.contextMenuVisible = false
-    }
-
-    contextMenuUnblacklist(): void {
-        if (this.contextMenuProfile && this.contextMenuProfile.id) {
-            this.config.store.profileBlacklist = this.config.store.profileBlacklist.filter(x => x !== this.contextMenuProfile!.id)
-            this.config.save()
-        }
-        this.contextMenuVisible = false
-    }
-
-    async contextMenuDelete(): Promise<void> {
-        if (!this.contextMenuProfile || this.contextMenuProfile.isBuiltin) {
-            this.contextMenuVisible = false
-            return
-        }
-
-        const result = await this.platform.showMessageBox({
-            type: 'warning',
-            message: this.translate.instant('Delete "{name}"?', this.contextMenuProfile),
-            buttons: [
-                this.translate.instant('Delete'),
-                this.translate.instant('Cancel'),
-            ],
-            defaultId: 1,
-            cancelId: 1,
-        })
-
-        if (result.response === 0) {
-            // Remove from config
-            this.config.store.profiles = this.config.store.profiles.filter(p => p.id !== this.contextMenuProfile!.id)
-            await this.config.save()
-
-            // Refresh the profile list
-            await this.refreshProfiles()
-        }
-
-        this.contextMenuVisible = false
-    }
-
-    async contextMenuPin(): Promise<void> {
-        if (!this.contextMenuProfile || !this.contextMenuProfile.id) {
-            this.contextMenuVisible = false
-            return
-        }
-
-        // Add to pinned profiles
-        if (!this.pinnedProfiles.includes(this.contextMenuProfile.id)) {
-            this.pinnedProfiles.push(this.contextMenuProfile.id)
-            this.savePinnedProfiles()
-            await this.refreshProfileGroups()
-        }
-
-        this.contextMenuVisible = false
-    }
-
-    async contextMenuUnpin(): Promise<void> {
-        if (!this.contextMenuProfile || !this.contextMenuProfile.id) {
-            this.contextMenuVisible = false
-            return
-        }
-
-        // Remove from pinned profiles
-        this.pinnedProfiles = this.pinnedProfiles.filter(id => id !== this.contextMenuProfile!.id)
-        this.savePinnedProfiles()
-        await this.refreshProfileGroups()
-
-        this.contextMenuVisible = false
     }
 
     isProfilePinned(profile: PartialProfile<SSHProfile>): boolean {
         return profile.id ? this.pinnedProfiles.includes(profile.id) : false
+    }
+
+    onProfileContextMenu(event: { event: MouseEvent, profile: PartialProfile<SSHProfile> }): void {
+        this.contextMenuProfile = event.profile
+        this.contextMenuPosition = {
+            x: event.event.clientX,
+            y: event.event.clientY,
+        }
+        this.contextMenuVisible = true
+    }
+
+    async onProfilePinned(profile: PartialProfile<SSHProfile>): Promise<void> {
+        if (profile.id && !this.pinnedProfiles.includes(profile.id)) {
+            this.pinnedProfiles.push(profile.id)
+            this.savePinnedProfiles()
+            await this.refreshProfileGroups()
+        }
+    }
+
+    async onProfileUnpinned(profile: PartialProfile<SSHProfile>): Promise<void> {
+        if (profile.id) {
+            this.pinnedProfiles = this.pinnedProfiles.filter(id => id !== profile.id)
+            this.savePinnedProfiles()
+            await this.refreshProfileGroups()
+        }
+    }
+
+    onGroupCollapseToggled(group: ProfileGroup): void {
+        let profileGroupCollapsed: Record<string, boolean> = {}
+        try { profileGroupCollapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}') } catch { /* corrupted, use defaults */ }
+        profileGroupCollapsed[group.id] = group.collapsed
+        window.localStorage.profileGroupCollapsed = JSON.stringify(profileGroupCollapsed)
+    }
+
+    // ─── Keyboard Navigation ───
+
+    @HostListener('keydown', ['$event'])
+    onKeyDown(event: KeyboardEvent): void {
+        // Don't handle if search input is focused (except Escape and ArrowDown)
+        const isSearchFocused = document.activeElement === this.searchInput?.nativeElement
+
+        switch (event.key) {
+            case '/':
+                if (!isSearchFocused) {
+                    event.preventDefault()
+                    this.searchInput?.nativeElement?.focus()
+                }
+                break
+            case 'Escape':
+                if (this.contextMenuVisible) {
+                    this.contextMenuVisible = false
+                } else if (isSearchFocused) {
+                    this.blurSearch()
+                } else {
+                    this.focusedProfileIndex = -1
+                }
+                break
+            case 'ArrowDown':
+                if (!isSearchFocused) {
+                    event.preventDefault()
+                    this.moveFocus(1)
+                }
+                break
+            case 'ArrowUp':
+                if (!isSearchFocused) {
+                    event.preventDefault()
+                    this.moveFocus(-1)
+                }
+                break
+            case 'Enter':
+                if (!isSearchFocused) {
+                    this.launchFocusedProfile()
+                }
+                break
+        }
+    }
+
+    getVisibleProfiles(): PartialProfile<SSHProfile>[] {
+        const result: PartialProfile<SSHProfile>[] = []
+        for (const group of this.profileGroups) {
+            if (!this.isGroupVisible(group) || group.collapsed) continue
+            for (const profile of group.profiles) {
+                if (this.isProfileVisibleForKeyboard(profile)) {
+                    result.push(profile)
+                }
+            }
+        }
+        return result
+    }
+
+    private isProfileVisibleForKeyboard(profile: PartialProfile<SSHProfile>): boolean {
+        return this.isProfileFullyVisible(profile)
+    }
+
+    matchesFilter(profile: PartialProfile<SSHProfile>, filterLower: string): boolean {
+        return matchesProfileFilter(profile, filterLower)
+    }
+
+    private moveFocus(direction: number): void {
+        const visible = this.getVisibleProfiles()
+        if (visible.length === 0) return
+
+        this.focusedProfileIndex += direction
+        if (this.focusedProfileIndex < 0) this.focusedProfileIndex = 0
+        if (this.focusedProfileIndex >= visible.length) this.focusedProfileIndex = visible.length - 1
+
+        this.scrollFocusedIntoView()
+    }
+
+    private launchFocusedProfile(): void {
+        const visible = this.getVisibleProfiles()
+        if (this.focusedProfileIndex >= 0 && this.focusedProfileIndex < visible.length) {
+            this.launchProfile(visible[this.focusedProfileIndex])
+        }
+    }
+
+    private scrollFocusedIntoView(): void {
+        // Use setTimeout to let Angular render the focused class first
+        setTimeout(() => {
+            const focused = document.querySelector('.ssh-sidebar-list .profile-item.keyboard-focused')
+            focused?.scrollIntoView({ block: 'nearest' })
+        }, 0)
+    }
+
+    blurSearch(): void {
+        this.searchInput?.nativeElement?.blur()
+    }
+
+    onSearchArrowDown(event: Event): void {
+        event.preventDefault()
+        this.blurSearch()
+        this.focusedProfileIndex = 0
+        this.scrollFocusedIntoView()
+    }
+
+    getFocusedProfileId(): string | null {
+        const visible = this.getVisibleProfiles()
+        if (this.focusedProfileIndex >= 0 && this.focusedProfileIndex < visible.length) {
+            return visible[this.focusedProfileIndex].id || null
+        }
+        return null
+    }
+
+    private updateActiveProfileIds(): void {
+        this.activeProfileIds = this.app.tabs
+            .map(tab => (tab as any).profile)
+            .filter(p => p && p.type === 'ssh' && p.id)
+            .map(p => p.id)
     }
 
     private savePinnedProfiles(): void {
@@ -1078,7 +746,63 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             this.config.store.pluginConfig = {}
         }
         this.config.store.pluginConfig['ssh-sidebar'] = pluginConfig
-        this.config.save()
+        this.scheduleSave()
+    }
+
+    // ─── Tag Management ───
+
+    setTagFilter(tag: string | null): void {
+        this.activeTagFilter = tag
+        this.focusedProfileIndex = -1
+    }
+
+    onTagAdded(event: { profile: PartialProfile<SSHProfile>, tag: string }): void {
+        const id = event.profile.id
+        if (!id) return
+        if (!this.profileTags[id]) this.profileTags[id] = []
+        if (!this.profileTags[id].includes(event.tag)) {
+            this.profileTags[id].push(event.tag)
+            this.saveProfileTags()
+        }
+    }
+
+    onTagRemoved(event: { profile: PartialProfile<SSHProfile>, tag: string }): void {
+        const id = event.profile.id
+        if (!id || !this.profileTags[id]) return
+        this.profileTags[id] = this.profileTags[id].filter(t => t !== event.tag)
+        if (this.profileTags[id].length === 0) {
+            delete this.profileTags[id]
+        }
+        this.saveProfileTags()
+    }
+
+    private loadProfileTags(): void {
+        const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
+        this.profileTags = pluginConfig.profileTags || {}
+        this.rebuildAllTags()
+    }
+
+    private saveProfileTags(): void {
+        const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
+        pluginConfig.profileTags = this.profileTags
+        if (!this.config.store.pluginConfig) {
+            this.config.store.pluginConfig = {}
+        }
+        this.config.store.pluginConfig['ssh-sidebar'] = pluginConfig
+        this.scheduleSave()
+        this.rebuildAllTags()
+    }
+
+    private rebuildAllTags(): void {
+        const tagSet = new Set<string>()
+        for (const tags of Object.values(this.profileTags)) {
+            for (const tag of tags) tagSet.add(tag)
+        }
+        this.allTags = Array.from(tagSet).sort()
+        // Clear active filter if the tag no longer exists
+        if (this.activeTagFilter && !this.allTags.includes(this.activeTagFilter)) {
+            this.activeTagFilter = null
+        }
     }
 
     private loadPinnedProfiles(): void {
@@ -1086,9 +810,40 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         this.pinnedProfiles = pluginConfig.pinnedProfiles || []
     }
 
-    private saveProfileGroupCollapse(group: ProfileGroup): void {
-        const profileGroupCollapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}')
-        profileGroupCollapsed[group.id] = group.collapsed
-        window.localStorage.profileGroupCollapsed = JSON.stringify(profileGroupCollapsed)
+    // ─── Connection Statistics ───
+
+    private loadProfileStats(): void {
+        const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
+        this.profileStats = pluginConfig.profileStats || {}
+    }
+
+    private recordProfileLaunch(profileId: string): void {
+        const stats = this.profileStats[profileId] || { lastConnected: 0, connectionCount: 0 }
+        stats.lastConnected = Date.now()
+        stats.connectionCount++
+        this.profileStats[profileId] = stats
+        this.saveProfileStats()
+    }
+
+    private saveProfileStats(): void {
+        const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
+        pluginConfig.profileStats = this.profileStats
+        if (!this.config.store.pluginConfig) {
+            this.config.store.pluginConfig = {}
+        }
+        this.config.store.pluginConfig['ssh-sidebar'] = pluginConfig
+        this.scheduleSave()
+    }
+
+    getLastConnected(profile: PartialProfile<SSHProfile>): string | null {
+        return formatTimeAgo(this.profileStats[profile.id || '']?.lastConnected)
+    }
+
+    private scheduleSave(): void {
+        if (this.saveTimer) clearTimeout(this.saveTimer)
+        this.saveTimer = setTimeout(() => {
+            this.scheduleSave()
+            this.saveTimer = null
+        }, 500)
     }
 }

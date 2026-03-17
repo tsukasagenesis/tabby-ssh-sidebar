@@ -14,6 +14,9 @@ import {
 } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
 import { SSHSidebarComponent } from './components/sshSidebar.component'
+import { SSHContextMenuComponent } from './components/contextMenu.component'
+import { SSHProfileItemComponent } from './components/profileItem.component'
+import { SSHProfileGroupComponent } from './components/profileGroup.component'
 import { SSHSidebarService } from './services/sshSidebar.service'
 
 /**
@@ -25,6 +28,7 @@ export interface SSHSidebarConfig {
     showInToolbar?: boolean
     sidebarVisible?: boolean
     sidebarCollapsed?: boolean
+    sidebarWidth?: number
 }
 
 /**
@@ -152,6 +156,9 @@ export class SSHSidebarInitializer {
     ],
     declarations: [
         SSHSidebarComponent,
+        SSHContextMenuComponent,
+        SSHProfileItemComponent,
+        SSHProfileGroupComponent,
     ],
     providers: [
         {
