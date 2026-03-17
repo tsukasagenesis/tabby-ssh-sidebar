@@ -78,7 +78,10 @@ export class SSHSidebarService {
 
     private loadWidth(): void {
         const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
-        this.sidebarWidth = pluginConfig.sidebarWidth || SSHSidebarService.DEFAULT_WIDTH
+        const raw = pluginConfig.sidebarWidth
+        this.sidebarWidth = (typeof raw === 'number' && raw >= SSHSidebarService.MIN_WIDTH && raw <= SSHSidebarService.MAX_WIDTH)
+            ? raw
+            : SSHSidebarService.DEFAULT_WIDTH
     }
 
     private saveWidth(): void {
@@ -139,40 +142,43 @@ export class SSHSidebarService {
         return handle
     }
 
+    // Stable references for resize listeners — avoids memory leak from per-mousedown closures
+    private resizeStartX = 0
+    private resizeStartWidth = 0
+    private resizeIsRight = false
+    private boundOnMouseMove = this.onResizeMouseMove.bind(this)
+    private boundOnMouseUp = this.onResizeMouseUp.bind(this)
+
     private setupResizeListeners(): void {
         if (!this.resizeHandle || !this.sidebarElement) return
-
-        const isRight = this.position === 'right'
-        let startX = 0
-        let startWidth = 0
-
-        const onMouseMove = (e: MouseEvent) => {
-            const delta = isRight ? (startX - e.clientX) : (e.clientX - startX)
-            const newWidth = Math.min(
-                SSHSidebarService.MAX_WIDTH,
-                Math.max(SSHSidebarService.MIN_WIDTH, startWidth + delta)
-            )
-            this.sidebarWidth = newWidth
-            this.updateSidebarWidth()
-        }
-
-        const onMouseUp = () => {
-            document.removeEventListener('mousemove', onMouseMove)
-            document.removeEventListener('mouseup', onMouseUp)
-            document.body.style.removeProperty('cursor')
-            document.body.style.removeProperty('user-select')
-            this.saveWidth()
-        }
+        this.resizeIsRight = this.position === 'right'
 
         this.resizeHandle.addEventListener('mousedown', (e: MouseEvent) => {
             e.preventDefault()
-            startX = e.clientX
-            startWidth = this.sidebarWidth
+            this.resizeStartX = e.clientX
+            this.resizeStartWidth = this.sidebarWidth
             document.body.style.cursor = 'col-resize'
             document.body.style.userSelect = 'none'
-            document.addEventListener('mousemove', onMouseMove)
-            document.addEventListener('mouseup', onMouseUp)
+            document.addEventListener('mousemove', this.boundOnMouseMove)
+            document.addEventListener('mouseup', this.boundOnMouseUp)
         })
+    }
+
+    private onResizeMouseMove(e: MouseEvent): void {
+        const delta = this.resizeIsRight ? (this.resizeStartX - e.clientX) : (e.clientX - this.resizeStartX)
+        this.sidebarWidth = Math.min(
+            SSHSidebarService.MAX_WIDTH,
+            Math.max(SSHSidebarService.MIN_WIDTH, this.resizeStartWidth + delta)
+        )
+        this.updateSidebarWidth()
+    }
+
+    private onResizeMouseUp(): void {
+        document.removeEventListener('mousemove', this.boundOnMouseMove)
+        document.removeEventListener('mouseup', this.boundOnMouseUp)
+        document.body.style.removeProperty('cursor')
+        document.body.style.removeProperty('user-select')
+        this.saveWidth()
     }
 
     private updateSidebarWidth(): void {
@@ -205,11 +211,11 @@ export class SSHSidebarService {
         style.id = 'ssh-sidebar-layout-css'
         style.textContent = `
             app-root {
-                display: flex;
-                flex-direction: row;
-                width: 100vw;
-                height: 100vh;
-                overflow: hidden;
+                display: flex !important;
+                flex-direction: row !important;
+                width: 100vw !important;
+                height: 100vh !important;
+                overflow: hidden !important;
             }
 
             .ssh-sidebar-wrapper {

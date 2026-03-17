@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Defensive config/state recovery — all JSON.parse calls wrapped in try/catch with fallback defaults
+- Error boundary around profile loading — shows user-visible toast on API failure instead of blank sidebar
+- Blacklist null safety — prevents TypeError on fresh Tabby installs without profileBlacklist
+- Fixed memory leak in resize event listeners — uses stable method references instead of per-mousedown closures
+- Keyboard focus index now resets on profile refresh, filter change, and tag filter change (prevents wrong profile launch)
+- Context menu viewport clamping — menu no longer renders off-screen near edges
+- Debounced config saves (500ms) — prevents write flooding on rapid pin/unpin/tag operations
+
 ### Added
+- Shared utility module (`utils.ts`) with `formatTimeAgo()` and `matchesProfileFilter()` functions
 - Sidebar resizability — drag the edge to resize between 180px and 600px, width persisted to config
 - Right-side positioning — set `position: 'right'` in plugin config to place sidebar on the right
 - Keyboard navigation — Arrow Up/Down to move between profiles, Enter to connect, `/` to focus search, Escape to dismiss

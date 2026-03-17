@@ -2,10 +2,7 @@ import { Component, Input, Output, EventEmitter } from '@angular/core'
 import {
     ProfilesService,
     TranslateService,
-    Profile,
     PartialProfile,
-    ProfileProvider,
-    AppService,
 } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
 

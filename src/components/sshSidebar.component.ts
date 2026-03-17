@@ -3,6 +3,7 @@ import {
     ProfilesService,
     AppService,
     ConfigService,
+    NotificationsService,
     Profile,
     PartialProfile,
     BaseComponent,
@@ -12,6 +13,7 @@ import { Subject } from 'rxjs'
 import { takeUntil, debounceTime } from 'rxjs/operators'
 import { ProfileGroup } from './profileGroup.component'
 import { ContextMenuPosition } from './contextMenu.component'
+import { formatTimeAgo, matchesProfileFilter } from '../utils'
 
 @Component({
     selector: 'ssh-sidebar',
@@ -337,12 +339,14 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     @ViewChild('searchInput') searchInput!: ElementRef<HTMLInputElement>
 
     private destroy$ = new Subject<void>()
+    private saveTimer: any = null
     public sidebarService: any = null
 
     constructor(
         private profiles: ProfilesService,
         private app: AppService,
         private config: ConfigService,
+        private notifications: NotificationsService,
     ) {
         super()
     }
@@ -383,20 +387,29 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     async refreshProfiles(): Promise<void> {
-        const allProfiles = await this.profiles.getProfiles()
-        this.sshProfiles = allProfiles.filter(p => {
-            if (p.type !== 'ssh') return false
-            if (p.isTemplate) return false
-            const sshProfile = p as PartialProfile<SSHProfile>
-            if (!sshProfile.options?.host) return false
-            return true
-        }) as PartialProfile<SSHProfile>[]
-        this.updateActiveProfileIds()
-        await this.refreshProfileGroups()
+        this.focusedProfileIndex = -1
+        try {
+            const allProfiles = await this.profiles.getProfiles()
+            this.sshProfiles = allProfiles.filter(p => {
+                if (p.type !== 'ssh') return false
+                if (p.isTemplate) return false
+                const sshProfile = p as PartialProfile<SSHProfile>
+                if (!sshProfile.options?.host) return false
+                return true
+            }) as PartialProfile<SSHProfile>[]
+            this.updateActiveProfileIds()
+            await this.refreshProfileGroups()
+        } catch (error) {
+            this.notifications.error(
+                'Could not load SSH profiles',
+                error instanceof Error ? error.message : 'Try restarting Tabby'
+            )
+        }
     }
 
     async refreshProfileGroups(): Promise<void> {
-        const profileGroupCollapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}')
+        let profileGroupCollapsed: Record<string, boolean> = {}
+        try { profileGroupCollapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}') } catch { /* corrupted, use defaults */ }
 
         await this.sortProfiles()
 
@@ -514,7 +527,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     refreshFilteredProfiles(): void {
-        // Filter is applied in sub-components via isProfileVisible
+        this.focusedProfileIndex = -1
     }
 
     isGroupVisible(group: ProfileGroup): boolean {
@@ -559,7 +572,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             }
             pluginConfig['ssh-sidebar'].sidebarCollapsed = this.collapsed
             this.config.store.pluginConfig = pluginConfig
-            this.config.save()
+            this.scheduleSave()
         }
     }
 
@@ -604,7 +617,8 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     onGroupCollapseToggled(group: ProfileGroup): void {
-        const profileGroupCollapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}')
+        let profileGroupCollapsed: Record<string, boolean> = {}
+        try { profileGroupCollapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}') } catch { /* corrupted, use defaults */ }
         profileGroupCollapsed[group.id] = group.collapsed
         window.localStorage.profileGroupCollapsed = JSON.stringify(profileGroupCollapsed)
     }
@@ -670,14 +684,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     matchesFilter(profile: PartialProfile<SSHProfile>, filterLower: string): boolean {
-        const parts = [
-            profile.name,
-            profile.options?.host,
-            profile.options?.user,
-            profile.options?.port != null ? String(profile.options.port) : '',
-        ]
-        const searchText = parts.filter(Boolean).join(' ').toLowerCase()
-        return searchText.includes(filterLower)
+        return matchesProfileFilter(profile, filterLower)
     }
 
     private moveFocus(direction: number): void {
@@ -739,13 +746,14 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             this.config.store.pluginConfig = {}
         }
         this.config.store.pluginConfig['ssh-sidebar'] = pluginConfig
-        this.config.save()
+        this.scheduleSave()
     }
 
     // ─── Tag Management ───
 
     setTagFilter(tag: string | null): void {
         this.activeTagFilter = tag
+        this.focusedProfileIndex = -1
     }
 
     onTagAdded(event: { profile: PartialProfile<SSHProfile>, tag: string }): void {
@@ -781,7 +789,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             this.config.store.pluginConfig = {}
         }
         this.config.store.pluginConfig['ssh-sidebar'] = pluginConfig
-        this.config.save()
+        this.scheduleSave()
         this.rebuildAllTags()
     }
 
@@ -824,22 +832,18 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             this.config.store.pluginConfig = {}
         }
         this.config.store.pluginConfig['ssh-sidebar'] = pluginConfig
-        this.config.save()
+        this.scheduleSave()
     }
 
     getLastConnected(profile: PartialProfile<SSHProfile>): string | null {
-        const stats = this.profileStats[profile.id || '']
-        if (!stats?.lastConnected) return null
-        const date = new Date(stats.lastConnected)
-        const now = new Date()
-        const diffMs = now.getTime() - date.getTime()
-        const diffMins = Math.floor(diffMs / 60000)
-        if (diffMins < 1) return 'Just now'
-        if (diffMins < 60) return `${diffMins}m ago`
-        const diffHours = Math.floor(diffMins / 60)
-        if (diffHours < 24) return `${diffHours}h ago`
-        const diffDays = Math.floor(diffHours / 24)
-        if (diffDays < 30) return `${diffDays}d ago`
-        return date.toLocaleDateString()
+        return formatTimeAgo(this.profileStats[profile.id || '']?.lastConnected)
+    }
+
+    private scheduleSave(): void {
+        if (this.saveTimer) clearTimeout(this.saveTimer)
+        this.saveTimer = setTimeout(() => {
+            this.scheduleSave()
+            this.saveTimer = null
+        }, 500)
     }
 }

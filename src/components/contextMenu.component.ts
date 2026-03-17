@@ -21,9 +21,10 @@ export interface ContextMenuPosition {
     selector: 'ssh-context-menu',
     template: `
         <div class="context-menu"
+             #contextMenuEl
              *ngIf="visible"
-             [style.left.px]="position.x"
-             [style.top.px]="position.y">
+             [style.left.px]="clampedPosition.x"
+             [style.top.px]="clampedPosition.y">
             <div class="context-menu-item" (click)="launch()">
                 <i class="fas fa-fw fa-play"></i>
                 <span>Launch</span>
@@ -224,17 +225,27 @@ export class SSHContextMenuComponent {
 
     @Output() closed = new EventEmitter<void>()
     @Output() profileLaunched = new EventEmitter<PartialProfile<SSHProfile>>()
-    @Output() profileEdited = new EventEmitter<PartialProfile<SSHProfile>>()
     @Output() profileDuplicated = new EventEmitter<void>()
     @Output() profileDeleted = new EventEmitter<void>()
     @Output() profilePinned = new EventEmitter<PartialProfile<SSHProfile>>()
     @Output() profileUnpinned = new EventEmitter<PartialProfile<SSHProfile>>()
-    @Output() profilesChanged = new EventEmitter<void>()
     @Output() tagAdded = new EventEmitter<{ profile: PartialProfile<SSHProfile>, tag: string }>()
     @Output() tagRemoved = new EventEmitter<{ profile: PartialProfile<SSHProfile>, tag: string }>()
 
     showTagInput = false
     newTagName = ''
+
+    private static readonly MENU_WIDTH = 220
+    private static readonly MENU_HEIGHT = 350
+
+    get clampedPosition(): ContextMenuPosition {
+        const maxX = window.innerWidth - SSHContextMenuComponent.MENU_WIDTH
+        const maxY = window.innerHeight - SSHContextMenuComponent.MENU_HEIGHT
+        return {
+            x: Math.max(0, Math.min(this.position.x, maxX)),
+            y: Math.max(0, Math.min(this.position.y, maxY)),
+        }
+    }
 
     constructor(
         private config: ConfigService,
@@ -399,12 +410,12 @@ export class SSHContextMenuComponent {
     }
 
     isProfileBlacklisted(): boolean {
-        return !!(this.profile?.id && this.config.store.profileBlacklist.includes(this.profile.id))
+        return !!(this.profile?.id && (this.config.store.profileBlacklist || []).includes(this.profile.id))
     }
 
     blacklist(): void {
         if (this.profile?.id) {
-            this.config.store.profileBlacklist = [...this.config.store.profileBlacklist, this.profile.id]
+            this.config.store.profileBlacklist = [...(this.config.store.profileBlacklist || []), this.profile.id]
             this.config.save()
             this.notifications.notice(`Hidden "${this.profile.name}" from selector`)
         }
@@ -413,7 +424,7 @@ export class SSHContextMenuComponent {
 
     unblacklist(): void {
         if (this.profile?.id) {
-            this.config.store.profileBlacklist = this.config.store.profileBlacklist.filter(x => x !== this.profile!.id)
+            this.config.store.profileBlacklist = (this.config.store.profileBlacklist || []).filter(x => x !== this.profile!.id)
             this.config.save()
             this.notifications.notice(`"${this.profile.name}" visible in selector`)
         }

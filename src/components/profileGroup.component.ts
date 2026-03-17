@@ -1,6 +1,7 @@
 import { Component, Input, Output, EventEmitter } from '@angular/core'
 import { PartialProfile } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
+import { formatTimeAgo, matchesProfileFilter } from '../utils'
 
 export interface ProfileGroup {
     id: string
@@ -79,22 +80,14 @@ export class SSHProfileGroupComponent {
     }
 
     isProfileVisible(profile: PartialProfile<SSHProfile>): boolean {
-        // Tag filter
         if (this.activeTagFilter) {
             const tags = this.profileTags[profile.id || ''] || []
             if (!tags.includes(this.activeTagFilter)) return false
         }
-        // Text filter
         if (!this.filter) return true
         const filterLower = this.filter.toLowerCase()
         if (this.group.name.toLowerCase().includes(filterLower)) return true
-        const parts = [
-            profile.name,
-            profile.options?.host,
-            profile.options?.user,
-            profile.options?.port != null ? String(profile.options.port) : '',
-        ]
-        return parts.filter(Boolean).join(' ').toLowerCase().includes(filterLower)
+        return matchesProfileFilter(profile, filterLower)
     }
 
     isActiveConnection(profile: PartialProfile<SSHProfile>): boolean {
@@ -102,17 +95,7 @@ export class SSHProfileGroupComponent {
     }
 
     getLastConnectedText(profile: PartialProfile<SSHProfile>): string | null {
-        const stats = this.profileStats[profile.id || '']
-        if (!stats?.lastConnected) return null
-        const diffMs = Date.now() - stats.lastConnected
-        const diffMins = Math.floor(diffMs / 60000)
-        if (diffMins < 1) return 'Just now'
-        if (diffMins < 60) return `${diffMins}m ago`
-        const diffHours = Math.floor(diffMins / 60)
-        if (diffHours < 24) return `${diffHours}h ago`
-        const diffDays = Math.floor(diffHours / 24)
-        if (diffDays < 30) return `${diffDays}d ago`
-        return new Date(stats.lastConnected).toLocaleDateString()
+        return formatTimeAgo(this.profileStats[profile.id || '']?.lastConnected)
     }
 
     onProfileContextMenu(event: MouseEvent, profile: PartialProfile<SSHProfile>): void {
