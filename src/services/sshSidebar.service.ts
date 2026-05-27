@@ -14,7 +14,11 @@ export class SSHSidebarService {
     private sidebarElement: HTMLElement | null = null
     private styleElement: HTMLStyleElement | null = null
     private isVisible = false
-    private readonly SIDEBAR_WIDTH = 280
+    // Default width; mutable so a user-chosen width (persisted in plugin config) can override it.
+    private SIDEBAR_WIDTH = 280
+    // Allowed resize bounds, shared by the live-drag clamp and the persisted-value validation.
+    private readonly MIN_WIDTH = 180
+    private readonly MAX_WIDTH = 600
 
     constructor(
         private componentFactoryResolver: ComponentFactoryResolver,
@@ -72,6 +76,15 @@ export class SSHSidebarService {
     }
 
     private createSidebar(): void {
+        // Restore the persisted sidebar width (if any) before building the wrapper,
+        // clamped to the allowed range so a corrupted/out-of-range value can't break the layout.
+        const savedConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
+        if (typeof savedConfig.sidebarWidth === 'number' &&
+            savedConfig.sidebarWidth >= this.MIN_WIDTH &&
+            savedConfig.sidebarWidth <= this.MAX_WIDTH) {
+            this.SIDEBAR_WIDTH = savedConfig.sidebarWidth
+        }
+
         // Create component
         const componentFactory = this.componentFactoryResolver.resolveComponentFactory(SSHSidebarComponent)
         this.sidebarComponentRef = componentFactory.create(this.injector)
@@ -94,9 +107,13 @@ export class SSHSidebarService {
             border-right: 1px solid var(--bs-border-color, #333);
             box-shadow: 2px 0 10px rgba(0,0,0,0.3);
             z-index: 999;
+            position: relative;  /* Anchor for the absolutely-positioned resize handle */
         `
 
         wrapper.appendChild(domElem)
+
+        // Add the draggable handle on the wrapper's right edge so the user can resize the panel.
+        this.addResizeHandle(wrapper)
 
         // Insert inside app-root as first child (before .content)
         const appRoot = document.querySelector('app-root')
@@ -135,6 +152,66 @@ export class SSHSidebarService {
             const component = this.sidebarComponentRef.instance
             component.sidebarService = this
         }
+    }
+
+    /**
+     * Adds a draggable handle pinned to the right edge of the sidebar wrapper, letting the
+     * user resize the panel by dragging. The width is clamped to [MIN_WIDTH, MAX_WIDTH] during
+     * the drag and persisted to the plugin config on release so it survives Tabby restarts.
+     *
+     * @param wrapper The sidebar wrapper element (must be position: relative so the handle anchors to it).
+     */
+    private addResizeHandle(wrapper: HTMLElement): void {
+        const resizer = document.createElement('div')
+        resizer.className = 'ssh-sidebar-resizer'
+        // Thin transparent strip on the right edge; the col-resize cursor signals it's draggable.
+        resizer.style.cssText = `
+            width: 8px;
+            cursor: col-resize;
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 10000;
+            background-color: transparent;
+        `
+        wrapper.appendChild(resizer)
+
+        resizer.addEventListener('mousedown', (downEvent: MouseEvent) => {
+            // Prevent text selection / native drag while resizing.
+            downEvent.preventDefault()
+            const startX = downEvent.clientX
+            const startWidth = wrapper.getBoundingClientRect().width
+
+            // Live-resize while the mouse moves, staying strictly within the allowed range.
+            const onMouseMove = (moveEvent: MouseEvent): void => {
+                const newWidth = startWidth + (moveEvent.clientX - startX)
+                if (newWidth > this.MIN_WIDTH && newWidth < this.MAX_WIDTH) {
+                    wrapper.style.width = `${newWidth}px`
+                    wrapper.style.flex = `0 0 ${newWidth}px`
+                    // Notify Tabby's terminal frontends so they re-fit to the new content width.
+                    window.dispatchEvent(new Event('resize'))
+                }
+            }
+
+            // On release: detach the document listeners and persist the final width.
+            const onMouseUp = (): void => {
+                document.removeEventListener('mousemove', onMouseMove)
+                document.removeEventListener('mouseup', onMouseUp)
+                const finalWidth = Math.round(wrapper.getBoundingClientRect().width)
+                if (finalWidth >= this.MIN_WIDTH && finalWidth <= this.MAX_WIDTH) {
+                    const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
+                    pluginConfig.sidebarWidth = finalWidth
+                    this.saveConfig(pluginConfig)
+                    this.SIDEBAR_WIDTH = finalWidth
+                }
+            }
+
+            // Listen on document (not the handle) so the drag keeps tracking even if the
+            // cursor outruns the thin strip.
+            document.addEventListener('mousemove', onMouseMove)
+            document.addEventListener('mouseup', onMouseUp)
+        })
     }
 
     private destroySidebar(): void {
