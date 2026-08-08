@@ -15,6 +15,8 @@ export class SSHSidebarService {
     private styleElement: HTMLStyleElement | null = null
     private isVisible = false
     private readonly SIDEBAR_WIDTH = 280
+    private mainElement: HTMLElement | null = null
+    private mainElementOriginalStyles: Map<string, string> = new Map()
 
     constructor(
         private componentFactoryResolver: ComponentFactoryResolver,
@@ -98,11 +100,24 @@ export class SSHSidebarService {
 
         wrapper.appendChild(domElem)
 
-        // Insert inside app-root as first child (before .content)
+        // Insert inside app-root as first child
         const appRoot = document.querySelector('app-root')
         if (!appRoot) {
             console.error('SSH Sidebar: Could not find app-root element')
             return
+        }
+
+        // Save the original main element BEFORE inserting the wrapper.
+        // The main element is whatever the first direct child of app-root is
+        // (e.g. .window.h-100.d-flex on Tabby 1.0.235), not a class-guessed
+        // .content element. See https://github.com/tsukasagenesis/tabby-ssh-sidebar/issues/7
+        this.mainElement = appRoot.firstElementChild as HTMLElement | null
+        if (this.mainElement) {
+            // Preserve original inline styles so they can be restored on hide
+            this.mainElementOriginalStyles.clear()
+            for (const prop of ['flex', 'width', 'min-width', 'max-width', 'height', 'overflow']) {
+                this.mainElementOriginalStyles.set(prop, this.mainElement.style.getPropertyValue(prop))
+            }
         }
 
         // Insert as first child
@@ -113,21 +128,16 @@ export class SSHSidebarService {
         // Inject CSS to make app-root a flex container
         this.injectLayoutCSS()
 
-        // Directly manipulate .content element's style to remove width: 100vw
-        // There are multiple .content elements - target the deeper nested one
-        const contentElements = appRoot.querySelectorAll('.content')
-        if (contentElements.length > 1) {
-            // Select the second (deeper) .content element
-            const contentElement = contentElements[1] as HTMLElement
-            contentElement.style.width = 'auto'
-            contentElement.style.flex = '1 1 auto'
-            contentElement.style.minWidth = '0'
-        } else if (contentElements.length === 1) {
-            // Fallback to first one if only one exists
-            const contentElement = contentElements[0] as HTMLElement
-            contentElement.style.width = 'auto'
-            contentElement.style.flex = '1 1 auto'
-            contentElement.style.minWidth = '0'
+        // Make the main element fill the remaining horizontal space.
+        // This targets the actual first child (any class), so it keeps working
+        // across Tabby layout changes. Inline styles win over stylesheet rules.
+        if (this.mainElement) {
+            this.mainElement.style.setProperty('flex', '1 1 0')
+            this.mainElement.style.setProperty('width', 'auto')
+            this.mainElement.style.setProperty('min-width', '0')
+            this.mainElement.style.setProperty('max-width', 'none')
+            this.mainElement.style.setProperty('height', '100%')
+            this.mainElement.style.setProperty('overflow', 'hidden')
         }
 
         // Inject service reference into component so it can call hide()
@@ -138,23 +148,18 @@ export class SSHSidebarService {
     }
 
     private destroySidebar(): void {
-        // Restore .content element's original styles
-        const appRoot = document.querySelector('app-root')
-        if (appRoot) {
-            const contentElements = appRoot.querySelectorAll('.content')
-            if (contentElements.length > 1) {
-                // Restore the second (deeper) .content element
-                const contentElement = contentElements[1] as HTMLElement
-                contentElement.style.removeProperty('width')
-                contentElement.style.removeProperty('flex')
-                contentElement.style.removeProperty('min-width')
-            } else if (contentElements.length === 1) {
-                // Fallback to first one
-                const contentElement = contentElements[0] as HTMLElement
-                contentElement.style.removeProperty('width')
-                contentElement.style.removeProperty('flex')
-                contentElement.style.removeProperty('min-width')
+        // Restore the main element's original inline styles
+        if (this.mainElement) {
+            for (const prop of ['flex', 'width', 'min-width', 'max-width', 'height', 'overflow']) {
+                const original = this.mainElementOriginalStyles.get(prop)
+                if (original) {
+                    this.mainElement.style.setProperty(prop, original)
+                } else {
+                    this.mainElement.style.removeProperty(prop)
+                }
             }
+            this.mainElement = null
+            this.mainElementOriginalStyles.clear()
         }
 
         // Remove injected CSS
@@ -186,15 +191,17 @@ export class SSHSidebarService {
                 overflow: hidden !important;
             }
 
-            /* Override Tabby's width: 100vw on .content - use calc to force correct width */
-            app-root > .content,
-            app-root > div.content,
-            app-root > .content[class],
-            app-root > [class*="content"] {
-                flex: 1 1 auto !important;
-                width: 0 !important;  /* Set to 0, let flex grow it */
-                max-width: 100% !important;
+            /* Fallback safety net: make whatever element follows the sidebar
+               wrapper fill the remaining space, regardless of its class name.
+               The primary sizing is done via inline styles on the main element,
+               this only guards against Tabby stylesheet rules with !important. */
+            app-root > .ssh-sidebar-wrapper + * {
+                flex: 1 1 0 !important;
+                width: auto !important;
                 min-width: 0 !important;
+                max-width: none !important;
+                height: 100% !important;
+                overflow: hidden;
             }
         `
 
