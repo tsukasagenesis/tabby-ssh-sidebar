@@ -91,10 +91,22 @@ Then restart Tabby.
 ### Context Menu Options
 
 Right-click any connection in the sidebar to access:
-- **Connect**: Open SSH connection in new tab
-- **Edit**: Open profile settings (navigates to settings tab and opens profile editor)
+- **Launch**: Open SSH connection in new tab
+- **Edit**: Open Tabby's profile editor for that connection
+- **Duplicate**: Create a copy of the connection profile
+- **Copy SSH Command**: Copy an `ssh user@host` command to the clipboard
+- **Move to Group...**: Move the connection to another group (or to Ungrouped)
+- **Hide from Selector** / **Show in Selector**: Manage the profile blacklist
 - **Pin to Favorites** / **Unpin from Favorites**: Manage favorite connections
 - **Delete**: Remove the connection profile
+
+Right-click a **group header** to access:
+- **Edit Group & Defaults**: Open Tabby's group editor - name, icon, colour, parent
+  group, and the per-provider defaults inherited by the hosts in that group
+- **Collapse** / **Expand**: Toggle the group
+
+Note that a group's own icon and colour decorate the group row, while settings
+under *Edit defaults* are what the hosts inside the group inherit.
 
 ### Managing Favorites
 
