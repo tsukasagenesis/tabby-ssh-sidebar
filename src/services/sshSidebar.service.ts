@@ -87,48 +87,40 @@ export class SSHSidebarService {
         wrapper.className = 'ssh-sidebar-wrapper'
         wrapper.style.cssText = `
             width: ${this.SIDEBAR_WIDTH}px;
-            flex: 0 0 ${this.SIDEBAR_WIDTH}px;  /* Don't grow or shrink */
+            min-width: ${this.SIDEBAR_WIDTH}px;
+            max-width: ${this.SIDEBAR_WIDTH}px;
+            flex: 0 0 ${this.SIDEBAR_WIDTH}px;
             display: flex;
             flex-direction: column;
             background: var(--bs-body-bg, #1e1e1e);
             border-right: 1px solid var(--bs-border-color, #333);
             box-shadow: 2px 0 10px rgba(0,0,0,0.3);
             z-index: 999;
+            height: 100%;
+            overflow: hidden;
         `
 
         wrapper.appendChild(domElem)
 
-        // Insert inside app-root as first child (before .content)
-        const appRoot = document.querySelector('app-root')
-        if (!appRoot) {
-            console.error('SSH Sidebar: Could not find app-root element')
-            return
+        // Insert inside Tabby's .window flex row, which already lays out
+        // horizontally - so the sidebar becomes a sibling of .content.main
+        const window_ = document.querySelector('app-root > .window')
+        if (window_) {
+            window_.insertBefore(wrapper, window_.firstChild)
+        } else {
+            // Fallback for layouts without a .window wrapper
+            const appRoot = document.querySelector('app-root')
+            if (!appRoot) {
+                console.error('SSH Sidebar: Could not find app-root or .window element')
+                return
+            }
+            appRoot.insertBefore(wrapper, appRoot.firstChild)
         }
-
-        // Insert as first child
-        appRoot.insertBefore(wrapper, appRoot.firstChild)
 
         this.sidebarElement = wrapper
 
-        // Inject CSS to make app-root a flex container
+        // Inject CSS so .content.main yields the sidebar's width
         this.injectLayoutCSS()
-
-        // Directly manipulate .content element's style to remove width: 100vw
-        // There are multiple .content elements - target the deeper nested one
-        const contentElements = appRoot.querySelectorAll('.content')
-        if (contentElements.length > 1) {
-            // Select the second (deeper) .content element
-            const contentElement = contentElements[1] as HTMLElement
-            contentElement.style.width = 'auto'
-            contentElement.style.flex = '1 1 auto'
-            contentElement.style.minWidth = '0'
-        } else if (contentElements.length === 1) {
-            // Fallback to first one if only one exists
-            const contentElement = contentElements[0] as HTMLElement
-            contentElement.style.width = 'auto'
-            contentElement.style.flex = '1 1 auto'
-            contentElement.style.minWidth = '0'
-        }
 
         // Inject service reference into component so it can call hide()
         if (this.sidebarComponentRef) {
@@ -138,26 +130,8 @@ export class SSHSidebarService {
     }
 
     private destroySidebar(): void {
-        // Restore .content element's original styles
-        const appRoot = document.querySelector('app-root')
-        if (appRoot) {
-            const contentElements = appRoot.querySelectorAll('.content')
-            if (contentElements.length > 1) {
-                // Restore the second (deeper) .content element
-                const contentElement = contentElements[1] as HTMLElement
-                contentElement.style.removeProperty('width')
-                contentElement.style.removeProperty('flex')
-                contentElement.style.removeProperty('min-width')
-            } else if (contentElements.length === 1) {
-                // Fallback to first one
-                const contentElement = contentElements[0] as HTMLElement
-                contentElement.style.removeProperty('width')
-                contentElement.style.removeProperty('flex')
-                contentElement.style.removeProperty('min-width')
-            }
-        }
-
-        // Remove injected CSS
+        // Remove injected CSS - nothing else to restore, since the layout is
+        // driven purely by the stylesheet rather than inline styles
         this.removeLayoutCSS()
 
         if (this.sidebarComponentRef) {
@@ -173,28 +147,34 @@ export class SSHSidebarService {
     }
 
     private injectLayoutCSS(): void {
-        // Make app-root a horizontal flex container to hold sidebar and content
         const style = document.createElement('style')
         style.id = 'ssh-sidebar-layout-css'
         style.textContent = `
-            /* Make app-root a horizontal flex container */
-            app-root {
-                display: flex !important;
-                flex-direction: row !important;
-                width: 100vw !important;
-                height: 100vh !important;
-                overflow: hidden !important;
+            /*
+             * Tabby's .window is already display:flex flex-direction:row.
+             * We just need to ensure .content.main fills the remaining space
+             * and doesn't use a fixed width like 100vw.
+             */
+            app-root > .window > .content.main {
+                flex: 1 1 0% !important;
+                width: 0 !important;
+                min-width: 0 !important;
+                max-width: none !important;
             }
 
-            /* Override Tabby's width: 100vw on .content - use calc to force correct width */
-            app-root > .content,
-            app-root > div.content,
-            app-root > .content[class],
-            app-root > [class*="content"] {
-                flex: 1 1 auto !important;
-                width: 0 !important;  /* Set to 0, let flex grow it */
-                max-width: 100% !important;
+            /* Also handle any direct .content child of .window as fallback */
+            app-root > .window > .content {
+                flex: 1 1 0% !important;
+                width: 0 !important;
                 min-width: 0 !important;
+                max-width: none !important;
+            }
+
+            /* Ensure the .window container itself is a proper flex row (should already be) */
+            app-root > .window {
+                display: flex !important;
+                flex-direction: row !important;
+                overflow: hidden !important;
             }
         `
 
