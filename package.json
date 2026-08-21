@@ -36,7 +36,8 @@
     "ts-loader": "^9.5.1",
     "typescript": "^5.4.5",
     "webpack": "^5.91.0",
-    "webpack-cli": "^5.1.4"
+    "webpack-cli": "^5.1.4",
+    "@ng-bootstrap/ng-bootstrap": "^14.2.0"
   },
   "peerDependencies": {
     "@angular/common": "17.3.5",
@@ -45,6 +46,7 @@
     "rxjs": "7.8.1",
     "tabby-core": "1.0.197-nightly.1",
     "tabby-terminal": "1.0.197-nightly.1",
-    "tabby-ssh": "1.0.197-nightly.1"
+    "tabby-ssh": "1.0.197-nightly.1",
+    "@ng-bootstrap/ng-bootstrap": "^14.2.0"
   }
 }

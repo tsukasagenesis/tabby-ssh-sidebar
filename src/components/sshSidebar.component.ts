@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, HostBinding, Inject, HostListener } from '@angular/core'
+import { Component, OnInit, OnDestroy, HostBinding, Inject, HostListener, ViewChild, ElementRef } from '@angular/core'
 import {
     ProfilesService,
     AppService,
@@ -10,8 +10,11 @@ import {
     BaseComponent,
     PlatformService,
     HostAppService,
+    SelectorService,
+    SelectorOption,
 } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
+import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
 import { Subject } from 'rxjs'
 import { takeUntil, debounceTime } from 'rxjs/operators'
 import deepClone from 'clone-deep'
@@ -21,6 +24,8 @@ interface ProfileGroup {
     name: string
     profiles: PartialProfile<SSHProfile>[]
     collapsed: boolean
+    icon?: string
+    color?: string
 }
 
 interface ContextMenuPosition {
@@ -57,7 +62,7 @@ interface ContextMenuPosition {
             <!-- Connection Count & Sort Bar -->
             <div class="ssh-sidebar-controls">
                 <div class="ssh-sidebar-count">
-                    {{ getConnectionCountText() }}
+                    {{ connectionCountText }}
                 </div>
                 <div class="ssh-sidebar-sort">
                     <button
@@ -106,9 +111,15 @@ interface ContextMenuPosition {
                     <ng-container *ngIf="isGroupVisible(group)">
                         <!-- Group Header -->
                         <div class="list-group-item list-group-item-action d-flex align-items-center group-header"
-                             (click)="toggleGroupCollapse(group)">
-                            <i class="fa fa-fw fa-chevron-right" *ngIf="group.collapsed && group.profiles.length > 0"></i>
-                            <i class="fa fa-fw fa-chevron-down" *ngIf="!group.collapsed && group.profiles.length > 0"></i>
+                             (click)="toggleGroupCollapse(group)"
+                             (contextmenu)="onGroupContextMenu($event, group)">
+                            <i class="fa fa-fw"
+                               [class.fa-chevron-right]="group.collapsed"
+                               [class.fa-chevron-down]="!group.collapsed"
+                               [style.visibility]="group.profiles.length > 0 ? 'visible' : 'hidden'"></i>
+                            <i class="fa-fw ms-1 group-icon"
+                               [ngClass]="group.icon || 'far fa-folder'"
+                               [style.color]="group.color || null"></i>
                             <span class="ms-2 me-auto">{{ group.name }}</span>
                             <span class="badge bg-secondary">{{ group.profiles.length }}</span>
                         </div>
@@ -170,14 +181,42 @@ interface ContextMenuPosition {
 
             <!-- Context Menu -->
             <div class="context-menu"
+                 #contextMenu
                  *ngIf="contextMenuVisible"
                  [style.left.px]="contextMenuPosition.x"
                  [style.top.px]="contextMenuPosition.y">
+
+                <!-- Group menu -->
+                <ng-container *ngIf="contextMenuMode === 'group'">
+                    <div class="context-menu-header">{{ contextMenuGroup?.name }}</div>
+                    <div class="context-menu-divider"></div>
+                    <div class="context-menu-item"
+                         *ngIf="contextMenuGroup && isEditableGroup(contextMenuGroup)"
+                         (click)="contextMenuEditGroup()">
+                        <i class="fas fa-fw fa-edit"></i>
+                        <span>Edit Group &amp; Defaults</span>
+                    </div>
+                    <div class="context-menu-item"
+                         *ngIf="contextMenuGroup && !isEditableGroup(contextMenuGroup)"
+                         (click)="contextMenuVisible = false">
+                        <i class="fas fa-fw fa-info-circle"></i>
+                        <span>Not a real group</span>
+                    </div>
+                    <div class="context-menu-item" (click)="contextMenuCollapseGroup()">
+                        <i class="fas fa-fw" [ngClass]="contextMenuGroup?.collapsed ? 'fa-chevron-down' : 'fa-chevron-right'"></i>
+                        <span>{{ contextMenuGroup?.collapsed ? 'Expand' : 'Collapse' }}</span>
+                    </div>
+                </ng-container>
+
+                <!-- Profile menu -->
+                <ng-container *ngIf="contextMenuMode === 'profile'">
                 <div class="context-menu-item" (click)="contextMenuLaunch()">
                     <i class="fas fa-fw fa-play"></i>
                     <span>Launch</span>
                 </div>
-                <div class="context-menu-item" (click)="contextMenuEdit()">
+                <div class="context-menu-item"
+                     *ngIf="contextMenuProfile && !contextMenuProfile.isBuiltin"
+                     (click)="contextMenuEdit()">
                     <i class="fas fa-fw fa-edit"></i>
                     <span>Edit</span>
                 </div>
@@ -188,6 +227,13 @@ interface ContextMenuPosition {
                 <div class="context-menu-item" (click)="contextMenuCopySSHCommand()">
                     <i class="fas fa-fw fa-terminal"></i>
                     <span>Copy SSH Command</span>
+                </div>
+                <div class="context-menu-divider"></div>
+                <div class="context-menu-item"
+                     *ngIf="contextMenuProfile && !contextMenuProfile.isBuiltin"
+                     (click)="contextMenuMoveToGroup()">
+                    <i class="fas fa-fw fa-folder-open"></i>
+                    <span>Move to Group...</span>
                 </div>
                 <div class="context-menu-divider"></div>
                 <div class="context-menu-item"
@@ -222,6 +268,7 @@ interface ContextMenuPosition {
                     <i class="fas fa-fw fa-trash-alt"></i>
                     <span>Delete</span>
                 </div>
+                </ng-container>
             </div>
         </div>
     `,
@@ -359,6 +406,11 @@ interface ContextMenuPosition {
             background: var(--bs-secondary-bg);
         }
 
+        .group-icon {
+            opacity: 0.75;
+            font-size: 12px;
+        }
+
         /* Profile Item Styling */
         .profile-item {
             padding: 10px 12px 10px 12px;
@@ -441,6 +493,9 @@ interface ContextMenuPosition {
             min-width: 200px;
             padding: 4px 0;
             font-size: 13px;
+            /* Never taller than the viewport - scroll instead of overflowing */
+            max-height: calc(100vh - 16px);
+            overflow-y: auto;
         }
 
         .context-menu-item {
@@ -476,6 +531,18 @@ interface ContextMenuPosition {
             background: var(--bs-border-color);
             margin: 4px 0;
         }
+
+        .context-menu-header {
+            padding: 6px 16px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--bs-secondary-color);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
     `]
 })
 export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDestroy {
@@ -488,11 +555,26 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     configGroups: any[] = []
     sortBy: 'name' | 'host' | 'recent' = 'name'
     pinnedProfiles: string[] = [] // Array of profile IDs
+    connectionCountText = ''
+
+    // Template getters run on every change detection pass, and this list can be
+    // hundreds of rows long. Anything that costs more than a map lookup has to be
+    // computed on refresh instead of per render - notably descriptions, which go
+    // through ProfilesService.getConfigProxyForProfile (four deepmerges plus a
+    // ConfigProxy construction, per profile, per call).
+    private descriptionCache = new Map<string, string | null>()
+    private activeProfileIds = new Set<string>()
+    private typeLabelCache = new Map<string, string>()
+    private typeColorCache = new Map<string, string>()
 
     // Context menu state
     contextMenuVisible = false
+    contextMenuMode: 'profile' | 'group' = 'profile'
     contextMenuPosition: ContextMenuPosition = { x: 0, y: 0 }
     contextMenuProfile: PartialProfile<SSHProfile> | null = null
+    contextMenuGroup: ProfileGroup | null = null
+
+    @ViewChild('contextMenu') contextMenuElement?: ElementRef<HTMLElement>
 
     private destroy$ = new Subject<void>()
     public sidebarService: any = null  // Will be injected by the service
@@ -504,9 +586,26 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         private translate: TranslateService,
         private platform: PlatformService,
         private hostApp: HostAppService,
+        private ngbModal: NgbModal,
+        private selector: SelectorService,
         @Inject(ProfileProvider) private profileProviders: ProfileProvider<Profile>[],
     ) {
         super()
+    }
+
+    /**
+     * Builds a profile ID in the same format Tabby's ProfilesService uses.
+     * Used only as a fallback when ProfilesService.newProfile is unavailable.
+     */
+    private generateProfileId(profile: PartialProfile<Profile>): string {
+        const slug = (profile.name || 'profile')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+        const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`
+        return `${profile.type}:custom:${slug}:${uuid}`
     }
 
     @HostListener('document:click', ['$event'])
@@ -522,8 +621,9 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         // Load pinned profiles
         this.loadPinnedProfiles()
 
+        // refreshProfiles() already rebuilds the groups, so calling
+        // refreshProfileGroups() as well just did the whole job twice
         await this.refreshProfiles()
-        await this.refreshProfileGroups()
 
         // Watch for config changes (profiles added/deleted/modified)
         // Config changes include profile edits, additions, and deletions
@@ -536,14 +636,13 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             .subscribe(async () => {
                 this.configGroups = this.config.store.groups || []
                 await this.refreshProfiles()
-                await this.refreshProfileGroups()
             })
 
         // Watch for tab changes to update active connection indicators
         this.app.tabsChanged$
             .pipe(takeUntil(this.destroy$))
             .subscribe(() => {
-                // Force change detection for active state
+                this.refreshActiveConnections()
             })
 
         // Load collapsed state from config
@@ -577,11 +676,56 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
 
             return true
         }) as PartialProfile<SSHProfile>[]
+
+        // Descriptions are expensive to derive, so build them once per refresh
+        // rather than letting the template recompute them every render
+        this.descriptionCache.clear()
+        for (const profile of this.sshProfiles) {
+            this.descriptionCache.set(this.profileCacheKey(profile), this.computeDescription(profile))
+        }
+
         await this.refreshProfileGroups()
+    }
+
+    private profileCacheKey(profile: PartialProfile<Profile>): string {
+        return profile.id ?? `name:${profile.name}`
+    }
+
+    /**
+     * Recomputes which profiles have a live tab, plus the header count text.
+     * Both used to be derived inside template getters, which meant walking every
+     * profile and every open tab on each change detection pass.
+     */
+    private refreshActiveConnections(): void {
+        const active = new Set<string>()
+        for (const tab of this.app.tabs) {
+            const tabProfile = (tab as any).profile
+            if (tabProfile && tabProfile.type === 'ssh' && tabProfile.id) {
+                active.add(tabProfile.id)
+            }
+        }
+        this.activeProfileIds = active
+
+        const total = this.sshProfiles.length
+        let activeCount = 0
+        for (const profile of this.sshProfiles) {
+            if (profile.id && active.has(profile.id)) {
+                activeCount++
+            }
+        }
+
+        const plural = total !== 1 ? 's' : ''
+        this.connectionCountText = activeCount === 0
+            ? `${total} connection${plural}`
+            : `${total} connection${plural} (${activeCount} active)`
     }
 
     async refreshProfileGroups(): Promise<void> {
         const profileGroupCollapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}')
+
+        // Must run before sortProfiles - the 'recent' sort puts active
+        // connections first, and reads this
+        this.refreshActiveConnections()
 
         // Sort profiles first
         await this.sortProfiles()
@@ -597,14 +741,29 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             grouped[groupId].push(profile)
         }
 
+        // Seed every configured group, so a group with no hosts in it yet - one
+        // you have just created, or one you emptied - still shows up and can be
+        // moved into. Groups used to be derived purely from the profiles, which
+        // made a new group invisible until something was already in it.
+        for (const configGroup of this.configGroups) {
+            if (configGroup?.id && !grouped[configGroup.id]) {
+                grouped[configGroup.id] = []
+            }
+        }
+
         // Convert to ProfileGroup array
         this.profileGroups = Object.entries(grouped).map(([groupId, profiles]) => {
             let groupName = groupId
+            let groupIcon: string | undefined
+            let groupColor: string | undefined
+
             if (groupId !== 'ungrouped') {
                 // Try to resolve group ID to name from config
                 const configGroup = this.configGroups.find(g => g.id === groupId)
                 if (configGroup) {
                     groupName = configGroup.name
+                    groupIcon = configGroup.icon
+                    groupColor = configGroup.color
                 }
             } else {
                 groupName = 'Ungrouped'
@@ -615,6 +774,8 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
                 name: groupName,
                 profiles,
                 collapsed: profileGroupCollapsed[groupId] ?? false,
+                icon: groupIcon,
+                color: groupColor,
             }
         })
 
@@ -642,9 +803,10 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             }
         }
 
-        // Remove empty groups
+        // Drop empty synthetic groups ('ungrouped'), but keep empty real ones so
+        // configured groups stay visible even when nothing is in them
         this.profileGroups = this.profileGroups.filter(group =>
-            group.profiles.length > 0
+            group.profiles.length > 0 || this.configGroups.some(g => g?.id === group.id)
         )
 
         // Sort groups: favorites first, ungrouped second, then alphabetically
@@ -724,6 +886,17 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     getDescription(profile: PartialProfile<Profile>): string | null {
+        const key = this.profileCacheKey(profile)
+        const cached = this.descriptionCache.get(key)
+        if (cached !== undefined) {
+            return cached
+        }
+        const computed = this.computeDescription(profile)
+        this.descriptionCache.set(key, computed)
+        return computed
+    }
+
+    private computeDescription(profile: PartialProfile<Profile>): string | null {
         // Try to use ProfilesService method if available, otherwise construct manually
         if (this.profiles.getDescription) {
             return this.profiles.getDescription(profile)
@@ -741,22 +914,40 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     getTypeLabel(profile: PartialProfile<Profile>): string {
+        // Keyed by profile type - the label only ever depends on the provider
+        const typeKey = profile.type ?? ''
+        const cached = this.typeLabelCache.get(typeKey)
+        if (cached !== undefined) {
+            return cached
+        }
+
         const provider = this.profiles.providerForProfile(profile)
         const name = provider?.name
-        if (name === 'Local terminal') {
-            return ''
-        }
-        return name ? this.translate.instant(name) : this.translate.instant('Unknown')
+        const label = name === 'Local terminal'
+            ? ''
+            : name ? this.translate.instant(name) : this.translate.instant('Unknown')
+
+        this.typeLabelCache.set(typeKey, label)
+        return label
     }
 
     getTypeColorClass(profile: PartialProfile<Profile>): string {
+        const typeKey = profile.type ?? ''
+        const cached = this.typeColorCache.get(typeKey)
+        if (cached !== undefined) {
+            return cached
+        }
+
         const provider = this.profiles.providerForProfile(profile)
-        return {
+        const colorClass = {
             ssh: 'secondary',
             serial: 'success',
             telnet: 'info',
             'split-layout': 'primary',
         }[provider?.id ?? ''] ?? 'warning'
+
+        this.typeColorCache.set(typeKey, colorClass)
+        return colorClass
     }
 
     toggleGroupCollapse(group: ProfileGroup): void {
@@ -777,13 +968,8 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     isActiveConnection(profile: PartialProfile<SSHProfile>): boolean {
-        // Check if there's an active tab with this profile
-        return this.app.tabs.some(tab => {
-            const tabProfile = (tab as any).profile
-            return tabProfile &&
-                   tabProfile.type === 'ssh' &&
-                   tabProfile.id === profile.id
-        })
+        // Set lookup - the set is rebuilt on refresh and whenever tabs change
+        return !!profile.id && this.activeProfileIds.has(profile.id)
     }
 
     isProfileBlacklisted(profile: PartialProfile<Profile>): boolean {
@@ -791,13 +977,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     getConnectionCountText(): string {
-        const total = this.sshProfiles.length
-        const active = this.sshProfiles.filter(p => this.isActiveConnection(p)).length
-
-        if (active === 0) {
-            return `${total} connection${total !== 1 ? 's' : ''}`
-        }
-        return `${total} connection${total !== 1 ? 's' : ''} (${active} active)`
+        return this.connectionCountText
     }
 
     toggleCollapse(): void {
@@ -824,12 +1004,231 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         event.preventDefault()
         event.stopPropagation()
 
+        this.contextMenuMode = 'profile'
+        this.contextMenuGroup = null
         this.contextMenuProfile = profile
         this.contextMenuPosition = {
             x: event.clientX,
             y: event.clientY,
         }
         this.contextMenuVisible = true
+
+        // The menu is created by *ngIf, so it cannot be measured until Angular
+        // has rendered it. Its height also varies with which items are visible
+        // (pin/unpin, hide/show, delete), so it has to be measured rather than
+        // assumed.
+        setTimeout(() => this.keepContextMenuOnScreen())
+    }
+
+    /**
+     * Flips the context menu back over the cursor when it would otherwise run
+     * off the bottom or right edge of the window, the way a native menu does.
+     */
+    private keepContextMenuOnScreen(): void {
+        const menu = this.contextMenuElement?.nativeElement
+        if (!menu) {
+            return
+        }
+
+        const margin = 8
+        const width = menu.offsetWidth
+        const height = menu.offsetHeight
+        let { x, y } = this.contextMenuPosition
+
+        if (x + width + margin > window.innerWidth) {
+            // Prefer opening to the left of the cursor, then clamp
+            x = x - width >= margin ? x - width : Math.max(margin, window.innerWidth - width - margin)
+        }
+
+        if (y + height + margin > window.innerHeight) {
+            // Prefer opening above the cursor, then clamp
+            y = y - height >= margin ? y - height : Math.max(margin, window.innerHeight - height - margin)
+        }
+
+        this.contextMenuPosition = { x, y }
+    }
+
+    onGroupContextMenu(event: MouseEvent, group: ProfileGroup): void {
+        event.preventDefault()
+        event.stopPropagation()
+
+        this.contextMenuMode = 'group'
+        this.contextMenuProfile = null
+        this.contextMenuGroup = group
+        this.contextMenuPosition = {
+            x: event.clientX,
+            y: event.clientY,
+        }
+        this.contextMenuVisible = true
+
+        setTimeout(() => this.keepContextMenuOnScreen())
+    }
+
+    /**
+     * 'favorites' and 'ungrouped' are synthesised by this sidebar rather than
+     * stored in config.store.groups, so there is nothing to edit for them.
+     */
+    isEditableGroup(group: ProfileGroup): boolean {
+        if (group.id === 'favorites' || group.id === 'ungrouped') {
+            return false
+        }
+        return (this.config.store.groups || []).some(g => g.id === group.id)
+    }
+
+    contextMenuCollapseGroup(): void {
+        if (this.contextMenuGroup) {
+            this.toggleGroupCollapse(this.contextMenuGroup)
+        }
+        this.contextMenuVisible = false
+    }
+
+    async contextMenuEditGroup(): Promise<void> {
+        const target = this.contextMenuGroup
+        this.contextMenuVisible = false
+
+        if (!target || !this.isEditableGroup(target)) {
+            return
+        }
+
+        // Edit the real stored group, not the display object this sidebar builds
+        const storedGroup = (this.config.store.groups || []).find(g => g.id === target.id)
+        if (!storedGroup) {
+            return
+        }
+
+        try {
+            const result = await this.showProfileGroupEditModal(deepClone(storedGroup))
+            if (!result) {
+                return
+            }
+
+            // Strip the fields Tabby's own settings tab strips before writing
+            const toWrite: any = { ...result }
+            delete toWrite.collapsed
+            delete toWrite.children
+
+            await (this.profiles as any).writeProfileGroup(toWrite)
+            await this.config.save()
+
+            this.configGroups = this.config.store.groups || []
+            await this.refreshProfiles()
+        } catch (error) {
+            console.error('SSH Sidebar: failed to edit the group:', error)
+        }
+    }
+
+    /**
+     * Mirrors ProfilesSettingsTabComponent.showProfileGroupEditModal - the group
+     * modal can hand back a provider, meaning "now edit this group's defaults for
+     * that provider", after which we return to the group modal.
+     */
+    private async showProfileGroupEditModal(group: any): Promise<any | null> {
+        const { EditProfileGroupModalComponent } = window['nodeRequire']('tabby-settings')
+
+        const modal = this.ngbModal.open(EditProfileGroupModalComponent, { size: 'lg' })
+        modal.componentInstance.group = group
+        modal.componentInstance.providers = this.profileProviders
+
+        const result = await modal.result.catch(() => null)
+        if (!result) {
+            return null
+        }
+
+        if (result.provider) {
+            return this.editProfileGroupDefaults(result.group, result.provider)
+        }
+
+        return result.group
+    }
+
+    private async editProfileGroupDefaults(group: any, provider: ProfileProvider<Profile>): Promise<any | null> {
+        const { EditProfileModalComponent } = window['nodeRequire']('tabby-settings')
+
+        const modal = this.ngbModal.open(EditProfileModalComponent, { size: 'lg' })
+        const model = group.defaults?.[provider.id] ?? {}
+        model.type = provider.id
+        modal.componentInstance.partialProfile = { ...model }
+        modal.componentInstance.profileProvider = provider
+        modal.componentInstance.defaultsMode = 'group'
+
+        const result = await modal.result.catch(() => null)
+        if (result) {
+            // Fully replace the defaults rather than merging into them
+            for (const k in model) {
+                delete model[k]
+            }
+            Object.assign(model, result)
+            if (!group.defaults) {
+                group.defaults = {}
+            }
+            group.defaults[provider.id] = model
+        }
+
+        // Back to the group modal, the way Tabby's settings tab loops
+        return this.showProfileGroupEditModal(group)
+    }
+
+    async contextMenuMoveToGroup(): Promise<void> {
+        const profile = this.contextMenuProfile
+        this.contextMenuVisible = false
+
+        if (!profile) {
+            return
+        }
+
+        if (!profile.id) {
+            await this.platform.showMessageBox({
+                type: 'warning',
+                message: this.translate.instant('This profile has no ID and cannot be moved from here. Please edit it in Settings -> Profiles.'),
+                buttons: [this.translate.instant('OK')],
+                defaultId: 0,
+                cancelId: 0,
+            })
+            return
+        }
+
+        const groups = this.config.store.groups || []
+        const options: SelectorOption<string>[] = [
+            {
+                name: this.translate.instant('Ungrouped'),
+                description: profile.group ? undefined : this.translate.instant('(current)'),
+                icon: 'fas fa-folder-open',
+                result: '',
+                weight: profile.group ? 1 : 0,
+            },
+            ...groups.map(g => ({
+                name: g.name,
+                description: g.id === profile.group ? this.translate.instant('(current)') : undefined,
+                icon: 'fas fa-folder',
+                result: g.id,
+                weight: g.id === profile.group ? 0 : 1,
+            })),
+        ]
+
+        const targetGroupId = await this.selector.show<string>(
+            this.translate.instant('Move "{name}" to group', profile),
+            options,
+        ).catch(() => null)
+
+        if (targetGroupId === null || targetGroupId === undefined) {
+            return
+        }
+
+        if ((profile.group ?? '') === targetGroupId) {
+            return
+        }
+
+        // Write through ProfilesService so the change lands on the stored profile
+        const updated: any = deepClone(profile)
+        if (targetGroupId) {
+            updated.group = targetGroupId
+        } else {
+            delete updated.group
+        }
+
+        await (this.profiles as any).writeProfile(updated)
+        await this.config.save()
+        await this.refreshProfiles()
     }
 
     contextMenuLaunch(): void {
@@ -846,105 +1245,78 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         }
 
         const profileToEdit = this.contextMenuProfile
-        const profileName = profileToEdit.name
-        const profileId = profileToEdit.id
+        this.contextMenuVisible = false
+
+        // Built-in profiles do not live in config.store.profiles, so writeProfile
+        // would find nothing and silently discard the edit. Tabby's own settings
+        // tab makes them non-clickable for the same reason.
+        if (profileToEdit.isBuiltin) {
+            await this.platform.showMessageBox({
+                type: 'warning',
+                message: this.translate.instant('Built-in profiles cannot be edited. Duplicate it first to make your own copy.'),
+                buttons: [this.translate.instant('OK')],
+                defaultId: 0,
+                cancelId: 0,
+            })
+            return
+        }
 
         try {
-            // Use Tabby's pattern for opening settings with profiles tab
+            // Open Tabby's own profile edit modal directly, the same way
+            // ProfilesSettingsTabComponent.editProfile does. Previously this
+            // method opened the settings tab and tried to synthesise a click on
+            // the matching row, which broke whenever Tabby's markup changed and
+            // could target the wrong row when two profiles shared a name.
+            const { EditProfileModalComponent } = window['nodeRequire']('tabby-settings')
+
+            const provider = this.profiles.providerForProfile(profileToEdit)
+            if (!provider) {
+                console.error('SSH Sidebar: cannot edit a profile without a provider')
+                return
+            }
+
+            const modal = this.ngbModal.open(EditProfileModalComponent, { size: 'lg' })
+            modal.componentInstance.partialProfile = deepClone(profileToEdit)
+            modal.componentInstance.profileProvider = provider
+
+            const result = await modal.result.catch(() => null)
+            if (!result) {
+                return
+            }
+
+            result.type = provider.id
+            await (this.profiles as any).writeProfile(result)
+            await this.config.save()
+            await this.refreshProfiles()
+        } catch (error) {
+            console.error('SSH Sidebar: failed to open the profile editor:', error)
+            this.openProfilesSettingsTab()
+        }
+    }
+
+    /**
+     * Fallback for when the edit modal cannot be opened - surface Tabby's
+     * profiles settings tab so the user can edit by hand.
+     */
+    private openProfilesSettingsTab(): void {
+        try {
             const { SettingsTabComponent } = window['nodeRequire']('tabby-settings')
-
-            // Check if a settings tab is already open
-            const existingSettingsTab = this.app.tabs.find(tab => tab instanceof SettingsTabComponent)
-
-            if (existingSettingsTab) {
-                // Reuse existing settings tab
-                console.log('Reusing existing settings tab')
-                this.app.selectTab(existingSettingsTab)
-
-                // Switch to profiles tab if not already there
-                const settingsComponent = existingSettingsTab as any
+            const existing = this.app.tabs.find(tab => tab instanceof SettingsTabComponent)
+            if (existing) {
+                this.app.selectTab(existing)
+                const settingsComponent = existing as any
                 if (settingsComponent.activeTab !== 'profiles') {
                     settingsComponent.activeTab = 'profiles'
                 }
             } else {
-                // Open new settings tab
-                console.log('Opening new settings tab')
                 this.app.openNewTabRaw({
                     type: SettingsTabComponent,
                     inputs: { activeTab: 'profiles' },
                 })
             }
-
-            // Wait for the settings tab to render
-            await new Promise(resolve => setTimeout(resolve, 500))
-
-            // Try to find and click the profile element in the settings tab
-            // The ProfilesSettingsTab renders profiles as clickable list items
-            // Structure: .list-group-item.ps-5 (profile item, has padding-start: 5)
-            //   - Click on the main element triggers editProfile()
-            //   - DO NOT click on the .fa-play button (that launches the profile)
-            let clicked = false
-
-            // Try multiple times with increasing delays to handle async rendering
-            for (let attempt = 0; attempt < 5 && !clicked; attempt++) {
-                if (attempt > 0) {
-                    await new Promise(resolve => setTimeout(resolve, 200))
-                }
-
-                // Find profile list items - they have .ps-5 class (padding-start: 5rem)
-                // This distinguishes them from group headers
-                const profileElements = document.querySelectorAll('.list-group-item.ps-5')
-
-                for (const element of Array.from(profileElements)) {
-                    const textContent = element.textContent || ''
-
-                    // Check if this element contains our profile name
-                    if (textContent.includes(profileName)) {
-                        console.log(`Found profile element for "${profileName}", attempting click...`)
-
-                        // Make sure we're clicking on the main element, not a button
-                        // The template structure has the profile name in a .no-wrap div
-                        const nameElement = element.querySelector('.no-wrap')
-
-                        if (nameElement && nameElement.textContent?.trim() === profileName) {
-                            console.log(`Exact match found, clicking on profile name element...`)
-
-                            try {
-                                // Click on the name element (guaranteed to trigger editProfile)
-                                const clickable = nameElement as HTMLElement
-                                clickable.click()
-                                console.log(`Clicked profile name for "${profileName}"`)
-                                clicked = true
-                                break
-                            } catch (err) {
-                                console.debug('Error clicking name element, trying main element:', err)
-
-                                // Fallback: click on the main list item
-                                try {
-                                    (element as HTMLElement).click()
-                                    console.log(`Clicked main element for "${profileName}"`)
-                                    clicked = true
-                                    break
-                                } catch (err2) {
-                                    console.debug('Error clicking main element:', err2)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (clicked) {
-                console.log('Successfully triggered profile edit by simulating click')
-            } else {
-                console.warn('Could not find profile element to click')
-                console.info(`Please manually click on "${profileName}" in the profiles list to edit it`)
-            }
         } catch (error) {
-            console.error('Failed to open settings or trigger edit:', error)
+            console.error('SSH Sidebar: could not open the profiles settings tab:', error)
         }
-
-        this.contextMenuVisible = false
     }
 
     async contextMenuDuplicate(): Promise<void> {
@@ -959,9 +1331,21 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         baseProfile.isBuiltin = false
         baseProfile.isTemplate = false
 
-        // Write the new profile
         this.config.store.profiles = this.config.store.profiles || []
-        this.config.store.profiles.push(baseProfile)
+
+        // The new profile MUST get an id. Tabby matches profiles by id when
+        // editing (writeProfile), deleting (deleteProfile) and when listing them
+        // in the profile selector, so an id-less profile is invisible in the
+        // selector, and deleting or editing one silently hits every other
+        // id-less profile as well.
+        const profilesService = this.profiles as any
+        if (profilesService.newProfile) {
+            await profilesService.newProfile(baseProfile)
+        } else {
+            baseProfile.id = this.generateProfileId(baseProfile)
+            this.config.store.profiles.push(baseProfile)
+        }
+
         await this.config.save()
 
         // Refresh the profile list
@@ -1014,9 +1398,25 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             return
         }
 
+        const profileToDelete = this.contextMenuProfile
+
+        // Deleting matches on id, so an id-less profile would take every other
+        // id-less profile down with it. Refuse rather than destroy data.
+        if (!profileToDelete.id) {
+            this.contextMenuVisible = false
+            await this.platform.showMessageBox({
+                type: 'warning',
+                message: this.translate.instant('This profile has no ID and cannot be safely deleted from here. Please delete it in Settings -> Profiles.'),
+                buttons: [this.translate.instant('OK')],
+                defaultId: 0,
+                cancelId: 0,
+            })
+            return
+        }
+
         const result = await this.platform.showMessageBox({
             type: 'warning',
-            message: this.translate.instant('Delete "{name}"?', this.contextMenuProfile),
+            message: this.translate.instant('Delete "{name}"?', profileToDelete),
             buttons: [
                 this.translate.instant('Delete'),
                 this.translate.instant('Cancel'),
@@ -1026,8 +1426,15 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         })
 
         if (result.response === 0) {
-            // Remove from config
-            this.config.store.profiles = this.config.store.profiles.filter(p => p.id !== this.contextMenuProfile!.id)
+            // Delegate to Tabby so the provider's own cleanup runs (for SSH that
+            // removes the saved password from the keychain) and so the profile's
+            // hotkey entry is dropped too.
+            const profilesService = this.profiles as any
+            if (profilesService.deleteProfile) {
+                await profilesService.deleteProfile(profileToDelete)
+            } else {
+                this.config.store.profiles = this.config.store.profiles.filter(p => p.id !== profileToDelete.id)
+            }
             await this.config.save()
 
             // Refresh the profile list
