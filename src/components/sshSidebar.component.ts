@@ -21,6 +21,8 @@ import { takeUntil, debounceTime } from 'rxjs/operators'
 import deepClone from 'clone-deep'
 import { InheritanceReport, analyseOptions, markerFor, mergeDefaults } from '../services/inheritance'
 import { InheritanceModalComponent, InheritanceResult } from './inheritanceModal.component'
+import { NormalizeGroupModalComponent, NormalizeResult } from './normalizeGroupModal.component'
+import { NormalizeEntry, buildNormalizePlan } from '../services/normalize'
 
 interface ProfileGroup {
     id: string
@@ -29,6 +31,10 @@ interface ProfileGroup {
     collapsed: boolean
     icon?: string
     color?: string
+    /** Profiles inside that blank a group setting */
+    blankCount?: number
+    /** Profiles inside that shadow a group setting with their own copy */
+    duplicateCount?: number
 }
 
 interface ContextMenuPosition {
@@ -123,7 +129,12 @@ interface ContextMenuPosition {
                             <i class="fa-fw ms-1 group-icon"
                                [ngClass]="group.icon || 'far fa-folder'"
                                [style.color]="group.color || null"></i>
-                            <span class="ms-2 me-auto">{{ group.name }}</span>
+                            <span class="ms-2">{{ group.name }}</span>
+                            <span class="inherit-dot ms-2"
+                                  *ngIf="group.blankCount || group.duplicateCount"
+                                  [ngClass]="group.blankCount ? 'dot-blank' : 'dot-duplicate'"
+                                  [title]="groupMarkerTitle(group)"></span>
+                            <span class="me-auto"></span>
                             <span class="badge bg-secondary">{{ group.profiles.length }}</span>
                         </div>
 
@@ -199,6 +210,12 @@ interface ContextMenuPosition {
                 <ng-container *ngIf="contextMenuMode === 'group'">
                     <div class="context-menu-header">{{ contextMenuGroup?.name }}</div>
                     <div class="context-menu-divider"></div>
+                    <div class="context-menu-item"
+                         *ngIf="contextMenuGroup && isEditableGroup(contextMenuGroup) && (contextMenuGroup.blankCount || contextMenuGroup.duplicateCount)"
+                         (click)="contextMenuNormalizeGroup()">
+                        <i class="fas fa-fw fa-sitemap"></i>
+                        <span>Normalize inheritance...</span>
+                    </div>
                     <div class="context-menu-item"
                          *ngIf="contextMenuGroup && isEditableGroup(contextMenuGroup)"
                          (click)="contextMenuEditGroup()">
@@ -772,6 +789,88 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         return `${report.counts.duplicate} setting(s) stored here as well as on the group, so they will not follow group changes`
     }
 
+    groupMarkerTitle(group: ProfileGroup): string {
+        const parts: string[] = []
+        if (group.blankCount) {
+            parts.push(`${group.blankCount} profile(s) blank a group setting`)
+        }
+        if (group.duplicateCount) {
+            parts.push(`${group.duplicateCount} profile(s) store their own copy of a group setting`)
+        }
+        return parts.join('; ')
+    }
+
+    async contextMenuNormalizeGroup(): Promise<void> {
+        const group = this.contextMenuGroup
+        this.contextMenuVisible = false
+
+        if (!group) {
+            return
+        }
+
+        const candidates = group.profiles.map(profile => ({
+            id: profile.id,
+            name: profile.name,
+            report: this.reportFor(profile) ?? this.buildInheritanceReport(profile),
+        }))
+
+        const plan = buildNormalizePlan(candidates)
+        if (!plan.significant.length && !plan.tidy.length) {
+            this.notifications.info('Nothing to normalize in this group')
+            return
+        }
+
+        const modal = this.ngbModal.open(NormalizeGroupModalComponent, { size: 'lg' })
+        modal.componentInstance.groupName = group.name
+        modal.componentInstance.plan = plan
+
+        const result: NormalizeResult | null = await modal.result.catch(() => null)
+        if (!result || !result.entries.length) {
+            return
+        }
+
+        await this.applyNormalize(result.entries)
+    }
+
+    /**
+     * Deletes the planned keys from each profile they were planned for. A key is
+     * only removed from the profiles the plan named, never blanket-applied, so a
+     * profile whose value genuinely differs is left alone.
+     */
+    private async applyNormalize(entries: NormalizeEntry[]): Promise<void> {
+        const byProfile = new Map<string, Set<string>>()
+        for (const entry of entries) {
+            for (const id of entry.profileIds) {
+                if (!byProfile.has(id)) {
+                    byProfile.set(id, new Set())
+                }
+                byProfile.get(id)!.add(entry.key)
+            }
+        }
+
+        const profilesService = this.profiles as any
+        let settings = 0
+
+        for (const [id, keys] of byProfile) {
+            const profile = this.sshProfiles.find(p => p.id === id)
+            if (!profile) {
+                continue
+            }
+            const updated: any = deepClone(profile)
+            for (const key of keys) {
+                delete updated.options?.[key]
+                settings++
+            }
+            await profilesService.writeProfile(updated)
+        }
+
+        await this.config.save()
+        await this.refreshProfiles()
+
+        this.notifications.info(
+            `Removed ${settings} redundant setting(s) from ${byProfile.size} profile(s)`)
+    }
+
     async contextMenuInheritance(): Promise<void> {
         const profile = this.contextMenuProfile
         this.contextMenuVisible = false
@@ -944,6 +1043,26 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         this.profileGroups = this.profileGroups.filter(group =>
             group.profiles.length > 0 || this.configGroups.some(g => g?.id === group.id)
         )
+
+        // Roll the per-profile reports up onto each group, so the header can show
+        // whether anything inside shadows the group's own settings
+        for (const group of this.profileGroups) {
+            let blank = 0
+            let duplicate = 0
+            for (const profile of group.profiles) {
+                const report = this.reportFor(profile)
+                if (!report) {
+                    continue
+                }
+                if (report.counts.blank > 0) {
+                    blank++
+                } else if (report.counts.duplicate > 0) {
+                    duplicate++
+                }
+            }
+            group.blankCount = blank
+            group.duplicateCount = duplicate
+        }
 
         // Sort groups: favorites first, ungrouped second, then alphabetically
         this.profileGroups.sort((a, b) => {
