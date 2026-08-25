@@ -25,6 +25,31 @@ export type SettingState =
     /** Stored, but identical to Tabby's own default and not set by the group */
     | 'tidy'
 
+/**
+ * Settings that identify a particular host and must never be inherited, however
+ * they are classified. A group that sets `host` as a default is a config error
+ * rather than something to inherit - dropping a profile's own host would point
+ * it at whatever the group happens to say.
+ */
+export const IDENTITY_KEYS = ['host']
+
+export function isIdentityKey(key: string): boolean {
+    return IDENTITY_KEYS.includes(key)
+}
+
+/**
+ * Whether dropping this row is safe. Only removing a redundant copy, an empty
+ * value blocking a real one, or a copy of Tabby's own default can be undone by
+ * inheritance; discarding a genuinely different value changes behaviour and
+ * belongs in Tabby's profile editor, not here.
+ */
+export function isSafeToInherit(row: SettingRow): boolean {
+    if (isIdentityKey(row.key)) {
+        return false
+    }
+    return row.state === 'duplicate' || row.state === 'blank' || row.state === 'tidy'
+}
+
 export interface SettingRow {
     key: string
     /** The value stored on the profile, or undefined when nothing is stored */

@@ -1,7 +1,7 @@
 import { Component } from '@angular/core'
 import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
 import { PartialProfile, Profile } from 'tabby-core'
-import { InheritanceReport, SettingRow } from '../services/inheritance'
+import { InheritanceReport, SettingRow, isIdentityKey, isSafeToInherit } from '../services/inheritance'
 
 const REDACTED_KEYS = ['password', 'privateKeys', 'passphrase']
 
@@ -30,6 +30,12 @@ export interface InheritanceResult {
                 <strong>{{ report.counts.blank }} setting{{ report.counts.blank === 1 ? '' : 's' }} blank.</strong>
                 This profile stores an empty value where the group provides a real one, so it inherits
                 nothing for {{ blankKeys }}.
+            </div>
+
+            <div class="alert alert-warning py-2 px-3 small" *ngIf="groupSetsIdentity">
+                <strong>This group sets a default host.</strong>
+                That is almost certainly a mistake - a host belongs to one server, not a group. Any profile
+                here without its own host will silently use the group's.
             </div>
 
             <div class="d-flex gap-4 mb-3">
@@ -85,6 +91,9 @@ export interface InheritanceResult {
                                         (click)="toggleStaged(row)">
                                     {{ isStaged(row) ? 'Keep' : 'Inherit' }}
                                 </button>
+                                <i class="fas fa-lock text-muted small"
+                                   *ngIf="!canInherit(row) && lockedReason(row)"
+                                   [title]="lockedReason(row)"></i>
                             </td>
                         </tr>
                     </tbody>
@@ -237,7 +246,23 @@ export class InheritanceModalComponent {
     }
 
     canInherit(row: SettingRow): boolean {
-        return row.state !== 'inherits'
+        return isSafeToInherit(row)
+    }
+
+    /** Explains why a row offers no Inherit button. */
+    lockedReason(row: SettingRow): string {
+        if (isIdentityKey(row.key)) {
+            return 'Identifies this host - never inherited'
+        }
+        if (row.state === 'own') {
+            return 'Differs from the group. Change it in the profile editor.'
+        }
+        return ''
+    }
+
+    /** A group setting host as a default is a mistake worth pointing out. */
+    get groupSetsIdentity(): boolean {
+        return this.report.rows.some(r => isIdentityKey(r.key) && r.group !== undefined)
     }
 
     isStaged(row: SettingRow): boolean {
