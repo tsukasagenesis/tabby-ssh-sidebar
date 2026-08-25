@@ -12,12 +12,15 @@ import {
     HostAppService,
     SelectorService,
     SelectorOption,
+    NotificationsService,
 } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
 import { Subject } from 'rxjs'
 import { takeUntil, debounceTime } from 'rxjs/operators'
 import deepClone from 'clone-deep'
+import { InheritanceReport, analyseOptions, markerFor, mergeDefaults } from '../services/inheritance'
+import { InheritanceModalComponent, InheritanceResult } from './inheritanceModal.component'
 
 interface ProfileGroup {
     id: string
@@ -139,6 +142,12 @@ interface ContextMenuPosition {
                                         [color]="profile.color">
                                     </profile-icon>
 
+                                    <!-- Inheritance marker -->
+                                    <span class="inherit-dot"
+                                          *ngIf="markerFor(profile)"
+                                          [ngClass]="'dot-' + markerFor(profile)"
+                                          [title]="markerTitle(profile)"></span>
+
                                     <!-- Profile Name & Description -->
                                     <div class="profile-info">
                                         <div class="profile-name">{{ profile.name }}</div>
@@ -223,6 +232,12 @@ interface ContextMenuPosition {
                 <div class="context-menu-item" (click)="contextMenuDuplicate()">
                     <i class="fas fa-fw fa-copy"></i>
                     <span>Duplicate</span>
+                </div>
+                <div class="context-menu-item"
+                     *ngIf="contextMenuProfile && contextMenuProfile.group"
+                     (click)="contextMenuInheritance()">
+                    <i class="fas fa-fw fa-sitemap"></i>
+                    <span>Inheritance...</span>
                 </div>
                 <div class="context-menu-item" (click)="contextMenuCopySSHCommand()">
                     <i class="fas fa-fw fa-terminal"></i>
@@ -428,6 +443,18 @@ interface ContextMenuPosition {
             border-left-color: var(--bs-primary);
         }
 
+        /* Inheritance marker */
+        .inherit-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            margin-left: 4px;
+        }
+
+        .dot-duplicate { background: var(--bs-warning); }
+        .dot-blank { background: var(--bs-danger); }
+
         /* Profile Info */
         .profile-info {
             flex: 1;
@@ -566,6 +593,9 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     private activeProfileIds = new Set<string>()
     private typeLabelCache = new Map<string, string>()
     private typeColorCache = new Map<string, string>()
+    private inheritanceCache = new Map<string, InheritanceReport>()
+    // Merged defaults depend only on provider and group, so they are shared
+    private fallbackCache = new Map<string, any>()
 
     // Context menu state
     contextMenuVisible = false
@@ -588,6 +618,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         private hostApp: HostAppService,
         private ngbModal: NgbModal,
         private selector: SelectorService,
+        private notifications: NotificationsService,
         @Inject(ProfileProvider) private profileProviders: ProfileProvider<Profile>[],
     ) {
         super()
@@ -680,11 +711,116 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         // Descriptions are expensive to derive, so build them once per refresh
         // rather than letting the template recompute them every render
         this.descriptionCache.clear()
+        this.inheritanceCache.clear()
+        this.fallbackCache.clear()
         for (const profile of this.sshProfiles) {
             this.descriptionCache.set(this.profileCacheKey(profile), this.computeDescription(profile))
+            this.inheritanceCache.set(this.profileCacheKey(profile), this.buildInheritanceReport(profile))
         }
 
         await this.refreshProfileGroups()
+    }
+
+    /**
+     * Classifies a profile's options against its group's defaults.
+     *
+     * The merged fallback (everything except the group layer) only depends on the
+     * provider and the group, so it is cached per pair rather than rebuilt for
+     * each of several hundred profiles.
+     */
+    private buildInheritanceReport(profile: PartialProfile<SSHProfile>): InheritanceReport {
+        const profilesService = this.profiles as any
+        const provider = this.profiles.providerForProfile(profile)
+        const groupId = profile.group ?? ''
+
+        const groupProviderDefaults = provider && profilesService.getProviderProfileGroupDefaults
+            ? profilesService.getProviderProfileGroupDefaults(groupId, provider)
+            : {}
+        const groupOptions = groupProviderDefaults?.options ?? {}
+
+        const fallbackKey = `${provider?.id ?? ''}|${groupId}`
+        let fallback = this.fallbackCache.get(fallbackKey)
+        if (!fallback) {
+            const layers = profilesService.getProfileDefaults
+                ? profilesService.getProfileDefaults(profile, { skipGroupDefaults: true })
+                : []
+            fallback = mergeDefaults(layers)?.options ?? {}
+            this.fallbackCache.set(fallbackKey, fallback)
+        }
+
+        return analyseOptions(profile.options ?? {}, groupOptions, fallback)
+    }
+
+    private reportFor(profile: PartialProfile<Profile>): InheritanceReport | undefined {
+        return this.inheritanceCache.get(this.profileCacheKey(profile))
+    }
+
+    /** 'blank', 'duplicate' or null - drives the dot on the sidebar row. */
+    markerFor(profile: PartialProfile<Profile>): string | null {
+        const report = this.reportFor(profile)
+        return report ? markerFor(report) : null
+    }
+
+    markerTitle(profile: PartialProfile<Profile>): string {
+        const report = this.reportFor(profile)
+        if (!report) {
+            return ''
+        }
+        if (report.counts.blank) {
+            return `${report.counts.blank} setting(s) blank while the group provides a value`
+        }
+        return `${report.counts.duplicate} setting(s) stored here as well as on the group, so they will not follow group changes`
+    }
+
+    async contextMenuInheritance(): Promise<void> {
+        const profile = this.contextMenuProfile
+        this.contextMenuVisible = false
+
+        if (!profile) {
+            return
+        }
+
+        const report = this.reportFor(profile) ?? this.buildInheritanceReport(profile)
+
+        const modal = this.ngbModal.open(InheritanceModalComponent, { size: 'lg' })
+        modal.componentInstance.profile = profile
+        modal.componentInstance.report = report
+        modal.componentInstance.profileName = profile.name ?? ''
+        modal.componentInstance.groupName = profile.group
+            ? this.configGroups.find(g => g?.id === profile.group)?.name ?? ''
+            : ''
+
+        const result: InheritanceResult | null = await modal.result.catch(() => null)
+        if (!result || !result.inheritKeys.length) {
+            return
+        }
+
+        await this.applyInherit(profile, result.inheritKeys)
+    }
+
+    /**
+     * Deletes the named option keys so Tabby's own resolution takes over again.
+     * This is the same outcome as ConfigProxy.__cleanup(), but for chosen keys
+     * rather than every key that happens to match a default.
+     */
+    private async applyInherit(profile: PartialProfile<SSHProfile>, keys: string[]): Promise<void> {
+        if (!profile.id) {
+            this.notifications.error('This profile has no ID, so it cannot be updated from here')
+            return
+        }
+
+        const updated: any = deepClone(profile)
+        for (const key of keys) {
+            delete updated.options?.[key]
+        }
+
+        await (this.profiles as any).writeProfile(updated)
+        await this.config.save()
+        await this.refreshProfiles()
+
+        this.notifications.info(keys.length === 1
+            ? '1 setting now inherits from the group'
+            : `${keys.length} settings now inherit from the group`)
     }
 
     private profileCacheKey(profile: PartialProfile<Profile>): string {
