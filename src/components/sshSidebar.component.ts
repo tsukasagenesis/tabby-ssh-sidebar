@@ -35,6 +35,8 @@ interface ProfileGroup {
     blankCount?: number
     /** Profiles inside that shadow a group setting with their own copy */
     duplicateCount?: number
+    /** Profiles inside that cannot connect because they have no host */
+    noHostCount?: number
 }
 
 interface ContextMenuPosition {
@@ -131,8 +133,8 @@ interface ContextMenuPosition {
                                [style.color]="group.color || null"></i>
                             <span class="ms-2">{{ group.name }}</span>
                             <span class="inherit-dot ms-2"
-                                  *ngIf="group.blankCount || group.duplicateCount"
-                                  [ngClass]="group.blankCount ? 'dot-blank' : 'dot-duplicate'"
+                                  *ngIf="group.blankCount || group.duplicateCount || group.noHostCount"
+                                  [ngClass]="(group.blankCount || group.noHostCount) ? 'dot-blank' : 'dot-duplicate'"
                                   [title]="groupMarkerTitle(group)"></span>
                             <span class="me-auto"></span>
                             <span class="badge bg-secondary">{{ group.profiles.length }}</span>
@@ -144,6 +146,7 @@ interface ContextMenuPosition {
                                 <div class="list-group-item profile-item d-flex align-items-center"
                                      *ngIf="isProfileVisible(profile)"
                                      [class.active]="isActiveConnection(profile)"
+                                     [class.unconnectable]="hasNoHost(profile)"
                                      (click)="launchProfile(profile)"
                                      (contextmenu)="onProfileContextMenu($event, profile)">
 
@@ -162,7 +165,11 @@ interface ContextMenuPosition {
                                     <!-- Profile Name & Description -->
                                     <div class="profile-info">
                                         <div class="profile-name">{{ profile.name }}</div>
-                                        <div class="profile-desc text-muted" *ngIf="getDescription(profile)">
+                                        <div class="profile-desc text-danger" *ngIf="hasNoHost(profile)">
+                                            no host set
+                                        </div>
+                                        <div class="profile-desc text-muted"
+                                             *ngIf="!hasNoHost(profile) && getDescription(profile)">
                                             {{ getDescription(profile) }}
                                         </div>
                                     </div>
@@ -471,6 +478,12 @@ interface ContextMenuPosition {
 
         .dot-duplicate { background: var(--bs-warning); }
         .dot-blank { background: var(--bs-danger); }
+        .dot-nohost { background: var(--bs-danger); }
+
+        .profile-item.unconnectable .profile-name {
+            opacity: 0.7;
+            text-decoration: underline dotted var(--bs-danger);
+        }
 
         /* Profile Info */
         .profile-info {
@@ -716,12 +729,10 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
                 return false
             }
 
-            // Exclude profiles without a host
-            const sshProfile = p as PartialProfile<SSHProfile>
-            if (!sshProfile.options?.host) {
-                return false
-            }
-
+            // Profiles with no host used to be excluded here. Hiding them meant a
+            // broken profile silently vanished from the list, which is exactly when
+            // it most needs looking at - and it invites creating a duplicate of
+            // something that already exists. They are listed and flagged instead.
             return true
         }) as PartialProfile<SSHProfile>[]
 
@@ -772,13 +783,24 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         return this.inheritanceCache.get(this.profileCacheKey(profile))
     }
 
-    /** 'blank', 'duplicate' or null - drives the dot on the sidebar row. */
-    markerFor(profile: PartialProfile<Profile>): string | null {
+    /** A profile with no host cannot connect at all. */
+    hasNoHost(profile: PartialProfile<SSHProfile>): boolean {
+        return !profile.options?.host
+    }
+
+    /** 'nohost', 'blank', 'duplicate' or null - drives the dot on the sidebar row. */
+    markerFor(profile: PartialProfile<SSHProfile>): string | null {
+        if (this.hasNoHost(profile)) {
+            return 'nohost'
+        }
         const report = this.reportFor(profile)
         return report ? markerFor(report) : null
     }
 
-    markerTitle(profile: PartialProfile<Profile>): string {
+    markerTitle(profile: PartialProfile<SSHProfile>): string {
+        if (this.hasNoHost(profile)) {
+            return 'No host set - this profile cannot connect'
+        }
         const report = this.reportFor(profile)
         if (!report) {
             return ''
@@ -791,6 +813,9 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
 
     groupMarkerTitle(group: ProfileGroup): string {
         const parts: string[] = []
+        if (group.noHostCount) {
+            parts.push(`${group.noHostCount} profile(s) have no host and cannot connect`)
+        }
         if (group.blankCount) {
             parts.push(`${group.blankCount} profile(s) blank a group setting`)
         }
@@ -1049,7 +1074,12 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         for (const group of this.profileGroups) {
             let blank = 0
             let duplicate = 0
+            let noHost = 0
             for (const profile of group.profiles) {
+                if (this.hasNoHost(profile)) {
+                    noHost++
+                    continue
+                }
                 const report = this.reportFor(profile)
                 if (!report) {
                     continue
@@ -1062,6 +1092,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             }
             group.blankCount = blank
             group.duplicateCount = duplicate
+            group.noHostCount = noHost
         }
 
         // Sort groups: favorites first, ungrouped second, then alphabetically
@@ -1214,6 +1245,11 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     launchProfile(profile: PartialProfile<Profile>): void {
+        if (this.hasNoHost(profile as PartialProfile<SSHProfile>)) {
+            this.notifications.error(`"${profile.name}" has no host set, so it cannot connect. Edit it to add one, or delete it.`)
+            return
+        }
+
         if (this.profiles.openNewTabForProfile) {
             this.profiles.openNewTabForProfile(profile)
         } else {
