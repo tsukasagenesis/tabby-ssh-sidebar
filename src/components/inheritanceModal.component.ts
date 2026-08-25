@@ -33,9 +33,9 @@ export interface InheritanceResult {
             </div>
 
             <div class="alert alert-warning py-2 px-3 small" *ngIf="groupSetsIdentity">
-                <strong>This group sets a default host.</strong>
-                That is almost certainly a mistake - a host belongs to one server, not a group. Any profile
-                here without its own host will silently use the group's.
+                <strong>This group sets a default <code>{{ groupIdentityKeyList }}</code>.</strong>
+                That is almost certainly a mistake - it belongs to one server, not a group. Any profile here
+                without its own value will silently pick the group's up.
             </div>
 
             <div class="d-flex gap-4 mb-3">
@@ -262,7 +262,11 @@ export class InheritanceModalComponent {
 
     /** A group setting host as a default is a mistake worth pointing out. */
     get groupSetsIdentity(): boolean {
-        return this.report.rows.some(r => isIdentityKey(r.key) && r.group !== undefined)
+        return this.report.groupIdentityKeys.length > 0
+    }
+
+    get groupIdentityKeyList(): string {
+        return this.report.groupIdentityKeys.join(', ')
     }
 
     isStaged(row: SettingRow): boolean {

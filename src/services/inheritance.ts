@@ -63,6 +63,12 @@ export interface SettingRow {
 
 export interface InheritanceReport {
     rows: SettingRow[]
+    /**
+     * Identity keys the group sets as a default. Not a property of the profile,
+     * but worth reporting: a group defaulting `host` is a config error, and any
+     * profile in it without its own host silently picks that value up.
+     */
+    groupIdentityKeys: string[]
     /** Rows whose state changes behaviour: worth showing by default */
     significant: SettingRow[]
     /** Rows that only tidy the config file: hidden until asked for */
@@ -139,6 +145,13 @@ export function analyseOptions(stored: any, groupOpts: any, fallback: any): Inhe
         const groupValue = hasGroup ? groupOpts[key] : undefined
         const fallbackValue = (fallback ?? {})[key]
 
+        // Identity keys are expected to differ per host, so reporting them as
+        // overrides would be noise. They are still checked on the group side
+        // below, since a group setting one is a mistake.
+        if (isIdentityKey(key)) {
+            continue
+        }
+
         // A stored object is a container: ConfigProxy walks into it and each
         // sub-key still resolves against the defaults, so it neither duplicates
         // nor blocks inheritance. Not worth reporting on.
@@ -184,6 +197,9 @@ export function analyseOptions(stored: any, groupOpts: any, fallback: any): Inhe
 
     return {
         rows,
+        groupIdentityKeys: IDENTITY_KEYS.filter(
+            k => Object.prototype.hasOwnProperty.call(groupOpts ?? {}, k),
+        ),
         significant: rows.filter(r => r.state !== 'tidy'),
         tidy: rows.filter(r => r.state === 'tidy'),
         counts,
