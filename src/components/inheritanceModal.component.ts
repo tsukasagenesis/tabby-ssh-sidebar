@@ -1,7 +1,7 @@
 import { Component } from '@angular/core'
 import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
 import { PartialProfile, Profile } from 'tabby-core'
-import { InheritanceReport, SettingRow, isIdentityKey, isSafeToInherit } from '../services/inheritance'
+import { InheritanceReport, SettingRow, isIdentityKey, isResettable, isSafeToInherit, resultOfInheriting } from '../services/inheritance'
 
 const REDACTED_KEYS = ['password', 'privateKeys', 'passphrase']
 
@@ -91,8 +91,18 @@ export interface InheritanceResult {
                                         (click)="toggleStaged(row)">
                                     {{ isStaged(row) ? 'Keep' : 'Inherit' }}
                                 </button>
+
+                                <button class="btn btn-sm btn-link py-0 text-warning"
+                                        *ngIf="needsConfirm(row) && !isStaged(row)"
+                                        (click)="requestReset(row)">
+                                    {{ confirming === row.key ? confirmLabel(row) : 'Reset...' }}
+                                </button>
+                                <button class="btn btn-sm btn-link py-0"
+                                        *ngIf="needsConfirm(row) && isStaged(row)"
+                                        (click)="toggleStaged(row)">Keep</button>
+
                                 <i class="fas fa-lock text-muted small"
-                                   *ngIf="!canInherit(row) && lockedReason(row)"
+                                   *ngIf="isHardLocked(row)"
                                    [title]="lockedReason(row)"></i>
                             </td>
                         </tr>
@@ -187,6 +197,8 @@ export class InheritanceModalComponent {
 
     showTidy = false
     staged: string[] = []
+    /** Key of the row awaiting a second click to confirm a reset */
+    confirming: string | null = null
 
     constructor(private modalInstance: NgbActiveModal) { }
 
@@ -249,15 +261,40 @@ export class InheritanceModalComponent {
         return isSafeToInherit(row)
     }
 
-    /** Explains why a row offers no Inherit button. */
+    /** A value that genuinely differs: resettable, but only after confirming. */
+    needsConfirm(row: SettingRow): boolean {
+        return isResettable(row)
+    }
+
+    /** Identity keys are never resettable at all. */
+    isHardLocked(row: SettingRow): boolean {
+        return row.state !== 'inherits' && !this.canInherit(row) && !this.needsConfirm(row)
+    }
+
     lockedReason(row: SettingRow): string {
         if (isIdentityKey(row.key)) {
             return 'Identifies this host - never inherited'
         }
-        if (row.state === 'own') {
-            return 'Differs from the group. Change it in the profile editor.'
-        }
         return ''
+    }
+
+    /** Spells out the actual outcome, since falling back to Tabby's default is
+     *  not the same as taking the group's value. */
+    confirmLabel(row: SettingRow): string {
+        const outcome = resultOfInheriting(row)
+        const shown = this.display(row.key, outcome.value)
+        return outcome.source === 'group'
+            ? `Use group's ${shown}?`
+            : `Fall back to Tabby default ${shown}?`
+    }
+
+    requestReset(row: SettingRow): void {
+        if (this.confirming === row.key) {
+            this.confirming = null
+            this.toggleStaged(row)
+            return
+        }
+        this.confirming = row.key
     }
 
     /** A group setting host as a default is a mistake worth pointing out. */
@@ -279,6 +316,7 @@ export class InheritanceModalComponent {
             : [...this.staged, row.key]
     }
 
+    /** Duplicates only - a genuinely different value is never swept up in bulk. */
     stageAllDuplicates(): void {
         const keys = this.report.rows.filter(r => r.state === 'duplicate').map(r => r.key)
         this.staged = [...new Set([...this.staged, ...keys])]

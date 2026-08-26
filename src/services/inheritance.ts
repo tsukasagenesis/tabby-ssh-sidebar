@@ -50,6 +50,29 @@ export function isSafeToInherit(row: SettingRow): boolean {
     return row.state === 'duplicate' || row.state === 'blank' || row.state === 'tidy'
 }
 
+/**
+ * Whether a genuinely different value can be reset to inherited.
+ *
+ * Separate from isSafeToInherit because this *does* change behaviour: it is
+ * offered one row at a time behind a confirmation, and never included in a bulk
+ * action. Identity keys stay out of it entirely.
+ */
+export function isResettable(row: SettingRow): boolean {
+    return !isIdentityKey(row.key) && row.state === 'own'
+}
+
+/**
+ * What a row would resolve to if its stored value were removed, and where that
+ * value comes from. Needed to say what a reset will actually do - falling back
+ * to Tabby's own default is a very different outcome from taking the group's
+ * value, and the two are easy to confuse.
+ */
+export function resultOfInheriting(row: SettingRow): { value: any, source: 'group' | 'default' } {
+    return row.group === undefined
+        ? { value: row.fallback, source: 'default' }
+        : { value: row.group, source: 'group' }
+}
+
 export interface SettingRow {
     key: string
     /** The value stored on the profile, or undefined when nothing is stored */
