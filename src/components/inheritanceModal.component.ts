@@ -47,9 +47,13 @@ export interface InheritanceResult {
                     <div class="stat-value text-warning">{{ report.counts.duplicate }}</div>
                     <div class="stat-label">duplicates group</div>
                 </div>
+                <div *ngIf="report.counts.override">
+                    <div class="stat-value text-info">{{ report.counts.override }}</div>
+                    <div class="stat-label">differs from group</div>
+                </div>
                 <div>
-                    <div class="stat-value">{{ report.counts.own }}</div>
-                    <div class="stat-label">this profile only</div>
+                    <div class="stat-value">{{ report.counts.local }}</div>
+                    <div class="stat-label">host specific</div>
                 </div>
                 <div>
                     <div class="stat-value">{{ report.counts.inherits }}</div>
@@ -169,7 +173,7 @@ export interface InheritanceResult {
 
         td.key.stripe-blank::before { background: var(--bs-danger); }
         td.key.stripe-duplicate::before { background: var(--bs-warning); }
-        td.key.stripe-own::before { background: var(--bs-primary); }
+        td.key.stripe-override::before { background: var(--bs-info); }
 
         tr.staged {
             opacity: 0.55;
@@ -242,7 +246,8 @@ export class InheritanceModalComponent {
             inherits: 'inherits',
             duplicate: 'same as group',
             blank: 'blank override',
-            own: 'this profile only',
+            override: 'differs from group',
+            local: 'this profile only',
             tidy: 'matches default',
         }[row.state]
     }
@@ -252,7 +257,8 @@ export class InheritanceModalComponent {
             inherits: 'text-bg-success',
             duplicate: 'text-bg-warning',
             blank: 'text-bg-danger',
-            own: 'text-bg-primary',
+            override: 'text-bg-info',
+            local: 'text-bg-secondary',
             tidy: 'text-bg-secondary',
         }[row.state]
     }

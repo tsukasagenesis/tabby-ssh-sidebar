@@ -37,6 +37,8 @@ interface ProfileGroup {
     duplicateCount?: number
     /** Profiles inside that cannot connect because they have no host */
     noHostCount?: number
+    /** Profiles inside that set something differing from the group */
+    overrideCount?: number
 }
 
 interface ContextMenuPosition {
@@ -133,8 +135,9 @@ interface ContextMenuPosition {
                                [style.color]="group.color || null"></i>
                             <span class="ms-2">{{ group.name }}</span>
                             <span class="inherit-dot ms-2"
-                                  *ngIf="group.blankCount || group.duplicateCount || group.noHostCount"
-                                  [ngClass]="(group.blankCount || group.noHostCount) ? 'dot-blank' : 'dot-duplicate'"
+                                  *ngIf="group.blankCount || group.duplicateCount || group.noHostCount || group.overrideCount"
+                                  [ngClass]="(group.blankCount || group.noHostCount) ? 'dot-blank'
+                                             : group.duplicateCount ? 'dot-duplicate' : 'dot-override'"
                                   [title]="groupMarkerTitle(group)"></span>
                             <span class="me-auto"></span>
                             <span class="badge bg-secondary">{{ group.profiles.length }}</span>
@@ -479,6 +482,7 @@ interface ContextMenuPosition {
         .dot-duplicate { background: var(--bs-warning); }
         .dot-blank { background: var(--bs-danger); }
         .dot-nohost { background: var(--bs-danger); }
+        .dot-override { background: var(--bs-info); }
 
         .profile-item.unconnectable .profile-name {
             opacity: 0.7;
@@ -808,7 +812,10 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         if (report.counts.blank) {
             return `${report.counts.blank} setting(s) blank while the group provides a value`
         }
-        return `${report.counts.duplicate} setting(s) stored here as well as on the group, so they will not follow group changes`
+        if (report.counts.duplicate) {
+            return `${report.counts.duplicate} setting(s) stored here as well as on the group, so they will not follow group changes`
+        }
+        return `${report.counts.override} setting(s) set here that disagree with the group`
     }
 
     groupMarkerTitle(group: ProfileGroup): string {
@@ -821,6 +828,9 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         }
         if (group.duplicateCount) {
             parts.push(`${group.duplicateCount} profile(s) store their own copy of a group setting`)
+        }
+        if (group.overrideCount) {
+            parts.push(`${group.overrideCount} profile(s) set something that disagrees with the group`)
         }
         return parts.join('; ')
     }
@@ -1074,6 +1084,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         for (const group of this.profileGroups) {
             let blank = 0
             let duplicate = 0
+            let override = 0
             let noHost = 0
             for (const profile of group.profiles) {
                 if (this.hasNoHost(profile)) {
@@ -1088,10 +1099,13 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
                     blank++
                 } else if (report.counts.duplicate > 0) {
                     duplicate++
+                } else if (report.counts.override > 0) {
+                    override++
                 }
             }
             group.blankCount = blank
             group.duplicateCount = duplicate
+            group.overrideCount = override
             group.noHostCount = noHost
         }
 

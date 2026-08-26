@@ -20,8 +20,10 @@ export type SettingState =
     | 'duplicate'
     /** Stored as empty while the group sets a real value: inherits nothing */
     | 'blank'
-    /** Stored and different from the group, or a value the group does not set */
-    | 'own'
+    /** Stored, and different from a value the group does set: diverges from it */
+    | 'override'
+    /** Stored, and the group says nothing about it: an ordinary host-specific value */
+    | 'local'
     /** Stored, but identical to Tabby's own default and not set by the group */
     | 'tidy'
 
@@ -58,7 +60,7 @@ export function isSafeToInherit(row: SettingRow): boolean {
  * action. Identity keys stay out of it entirely.
  */
 export function isResettable(row: SettingRow): boolean {
-    return !isIdentityKey(row.key) && row.state === 'own'
+    return !isIdentityKey(row.key) && (row.state === 'override' || row.state === 'local')
 }
 
 /**
@@ -190,11 +192,14 @@ export function analyseOptions(stored: any, groupOpts: any, fallback: any): Inhe
         } else if (hasGroup && isEmptyValue(storedValue) && !isEmptyValue(groupValue)) {
             state = 'blank'
         } else if (hasGroup) {
-            state = 'own'
+            // The group sets this and we disagree with it - worth surfacing
+            state = 'override'
         } else if (deepEqual(storedValue, fallbackValue)) {
             state = 'tidy'
         } else {
-            state = 'own'
+            // The group says nothing about this, so a value here is just this
+            // host being itself. Every host has several; not a finding.
+            state = 'local'
         }
 
         rows.push({
@@ -207,12 +212,12 @@ export function analyseOptions(stored: any, groupOpts: any, fallback: any): Inhe
     }
 
     const order: Record<SettingState, number> = {
-        blank: 0, duplicate: 1, own: 2, inherits: 3, tidy: 4,
+        blank: 0, duplicate: 1, override: 2, local: 3, inherits: 4, tidy: 5,
     }
     rows.sort((a, b) => order[a.state] - order[b.state] || a.key.localeCompare(b.key))
 
     const counts: Record<SettingState, number> = {
-        inherits: 0, duplicate: 0, blank: 0, own: 0, tidy: 0,
+        inherits: 0, duplicate: 0, blank: 0, override: 0, local: 0, tidy: 0,
     }
     for (const row of rows) {
         counts[row.state]++
@@ -229,13 +234,22 @@ export function analyseOptions(stored: any, groupOpts: any, fallback: any): Inhe
     }
 }
 
-/** The single worst thing about a profile, for the sidebar marker. */
-export function markerFor(report: InheritanceReport): 'blank' | 'duplicate' | null {
+/**
+ * The single most notable thing about a profile, for the sidebar marker.
+ *
+ * Ordered by how much it is likely to surprise: a blank that inherits nothing,
+ * then a copy that will not follow the group, then a value that disagrees with
+ * the group. Host-specific values are not marked - every host has them.
+ */
+export function markerFor(report: InheritanceReport): 'blank' | 'duplicate' | 'override' | null {
     if (report.counts.blank > 0) {
         return 'blank'
     }
     if (report.counts.duplicate > 0) {
         return 'duplicate'
+    }
+    if (report.counts.override > 0) {
+        return 'override'
     }
     return null
 }
