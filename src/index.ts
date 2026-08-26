@@ -14,6 +14,8 @@ import {
 } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
 import { SSHSidebarComponent } from './components/sshSidebar.component'
+import { InheritanceModalComponent } from './components/inheritanceModal.component'
+import { NormalizeGroupModalComponent } from './components/normalizeGroupModal.component'
 import { SSHSidebarService } from './services/sshSidebar.service'
 
 /**
@@ -152,6 +154,8 @@ export class SSHSidebarInitializer {
     ],
     declarations: [
         SSHSidebarComponent,
+        InheritanceModalComponent,
+        NormalizeGroupModalComponent,
     ],
     providers: [
         {

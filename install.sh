@@ -23,7 +23,18 @@ echo "Building plugin..."
 npm run build
 
 # Find Tabby plugins directory
-TABBY_PLUGINS_DIR="$HOME/.config/tabby/plugins"
+# Tabby keeps plugins under Electron's userData path, which differs per platform
+case "$(uname -s)" in
+    Darwin)
+        TABBY_PLUGINS_DIR="$HOME/Library/Application Support/tabby/plugins"
+        ;;
+    MINGW*|MSYS*|CYGWIN*)
+        TABBY_PLUGINS_DIR="${APPDATA:-$HOME/AppData/Roaming}/tabby/plugins"
+        ;;
+    *)
+        TABBY_PLUGINS_DIR="$HOME/.config/tabby/plugins"
+        ;;
+esac
 
 if [ ! -d "$TABBY_PLUGINS_DIR" ]; then
     echo "Creating Tabby plugins directory: $TABBY_PLUGINS_DIR"
