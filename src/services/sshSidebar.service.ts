@@ -24,7 +24,7 @@ export class SSHSidebarService {
         private appRef: ApplicationRef,
         private injector: Injector,
         private config: ConfigService,
-    ) {}
+    ) { }
 
     show(): void {
         if (this.isVisible) {
@@ -69,6 +69,7 @@ export class SSHSidebarService {
     initialize(): void {
         const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
         // Open sidebar by default on first startup, or if explicitly set to visible
+
         if (pluginConfig.sidebarVisible !== false) {
             this.show()
         }
