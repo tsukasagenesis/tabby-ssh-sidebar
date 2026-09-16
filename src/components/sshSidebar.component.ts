@@ -547,33 +547,6 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
 
-    /**
-     * Normalizes whatever Tabby stores in profile.icon to what <profile-icon> expects.
-     * Supports:
-     * - "server"
-     * - "fa-server"
-     * - "fas fa-server" / "fab fa-github"
-     * - inline SVG ("<svg ...")
-     */
-    normalizeProfileIcon(icon?: string): string | null {
-        if (!icon) {
-            return null
-        }
-
-        const s = icon.trim()
-
-        // SVG pasted into the Icon field
-        if (s.startsWith('<svg')) {
-            return s
-        }
-
-        // Handle values like: "fas fa-server" / "fab fa-github" / "fa-server"
-        const lastToken = s.split(/\s+/).pop() || s
-        const name = lastToken.startsWith('fa-') ? lastToken.slice(3) : lastToken
-
-        return name || null
-    }
-
     @HostListener('document:click', ['$event'])
     onDocumentClick(event: MouseEvent): void {
         // Close context menu when clicking outside
