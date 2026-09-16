@@ -117,8 +117,21 @@ The plugin stores its configuration in Tabby's settings. Configuration is automa
 
 ## Requirements
 
-- Tabby Terminal v1.0.197 or later
+- Tabby Terminal v1.0.197 or later (tested against v1.0.235)
 - Node.js and npm for building
+
+## Troubleshooting
+
+### Installing from Settings → Plugins fails
+
+Versions up to 0.3.2 declared `peerDependencies` pinned to Angular 17.3.5 while
+Tabby's own packages ask for Angular 15. Tabby installs plugins with npm's
+programmatic API and cannot pass `--legacy-peer-deps`, so npm aborted with an
+`ERESOLVE` error and the install never completed.
+
+Those peer dependencies are gone as of 0.4.0 — every one of them is a webpack
+`external` that Tabby supplies at runtime, so the plugin never needed to pull
+them itself. Installing from the plugin manager works again; no flags required.
 
 ## Development
 
@@ -141,11 +154,11 @@ npm run build
 This plugin uses several Tabby APIs:
 
 - **ToolbarButtonProvider**: Adds toggle button to main toolbar
-- **SSHSidebarService**: Manages sidebar lifecycle and flexbox layout injection
+- **SSHSidebarService**: Manages sidebar lifecycle and layout integration
 - **ProfilesService**: Retrieves and manages SSH connection profiles
 - **ConfigService**: Persists user preferences (favorites, visibility, collapse state)
 
-The sidebar is implemented as a dynamically injected Angular component that modifies the app-root flexbox layout to create a true persistent sidebar panel.
+The sidebar is implemented as a dynamically injected Angular component. It is inserted into Tabby's `.window` element — the horizontal flex container that holds `profile-tree` and `.content.main` — so the sidebar participates in Tabby's own row layout and the terminal area simply shrinks to fit. `app-root` itself is a *column* flex container (title bar above, window below) and is deliberately left untouched.
 
 ## License
 

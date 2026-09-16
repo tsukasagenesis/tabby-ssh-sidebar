@@ -10,6 +10,8 @@ import {
     BaseComponent,
     PlatformService,
     HostAppService,
+    HostWindowService,
+    Platform,
 } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
 import { Subject } from 'rxjs'
@@ -35,7 +37,7 @@ interface ContextMenuPosition {
 @Component({
     selector: 'ssh-sidebar',
     template: `
-        <div class="ssh-sidebar-container" [class.collapsed]="collapsed">
+        <div class="ssh-sidebar-container" [class.collapsed]="collapsed" [class.mac-inset]="isMacInset">
             <!-- Sidebar Header -->
             <div class="ssh-sidebar-header">
                 <div class="ssh-sidebar-title">
@@ -250,6 +252,18 @@ interface ContextMenuPosition {
             padding: 12px 16px;
             border-bottom: 1px solid var(--bs-border-color);
             background: var(--bs-tertiary-bg);
+        }
+
+        /*
+         * On macOS the native window controls ("traffic lights") are drawn over
+         * the top-left of the window whenever the thin frame is used and there is
+         * no title bar. The sidebar is a sibling of Tabby's own profile-tree
+         * inside .window, so it sits in exactly that spot and the buttons would
+         * overlap the header. Mirror upstream's profile-tree.mac-inset rule --
+         * same offset, same conditions -- instead of hardcoding a pixel value.
+         */
+        .ssh-sidebar-container.mac-inset .ssh-sidebar-header {
+            padding-top: calc(12px + var(--tabs-height));
         }
 
         .ssh-sidebar-title {
@@ -514,6 +528,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         private translate: TranslateService,
         private platform: PlatformService,
         private hostApp: HostAppService,
+        private hostWindow: HostWindowService,
         @Inject(ProfileProvider) private profileProviders: ProfileProvider<Profile>[],
     ) {
         super()

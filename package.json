@@ -1,6 +1,6 @@
 {
   "name": "tabby-ssh-sidebar",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "A persistent SSH connections sidebar panel for Tabby Terminal with favorites, context menus, and profile management",
   "keywords": [
     "tabby-plugin",
@@ -10,6 +10,12 @@
     "tabby"
   ],
   "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "webpack --mode production",
     "watch": "webpack --mode development --watch",
