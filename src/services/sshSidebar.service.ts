@@ -153,8 +153,8 @@ export class SSHSidebarService {
 
     /**
      * Adds a draggable handle pinned to the right edge of the sidebar wrapper, letting the
-     * user resize the panel by dragging. The width is clamped to [MIN_WIDTH, MAX_WIDTH] during
-     * the drag and persisted to the plugin config on release so it survives Tabby restarts.
+     * user resize the panel by dragging. The width is clamped to [MIN_WIDTH, MAX_WIDTH] (inclusive)
+     * during the drag, terminal re-fits are throttled to one per animation frame, and the width is persisted to the plugin config on release so it survives Tabby restarts.
      *
      * @param wrapper The sidebar wrapper element (must be position: relative so the handle anchors to it).
      */
@@ -180,21 +180,39 @@ export class SSHSidebarService {
             const startX = downEvent.clientX
             const startWidth = wrapper.getBoundingClientRect().width
 
-            // Live-resize while the mouse moves, staying strictly within the allowed range.
+            // Pending animation frame for the throttled 'resize' notification (null = none queued).
+            let resizeFrame: number | null = null
+
+            // Live-resize while the mouse moves. The width is clamped (inclusive) rather than
+            // rejected, so dragging past a bound pins the panel exactly at MIN_WIDTH/MAX_WIDTH -
+            // the same range the restore path accepts, so any saved width is reachable by drag.
             const onMouseMove = (moveEvent: MouseEvent): void => {
-                const newWidth = startWidth + (moveEvent.clientX - startX)
-                if (newWidth > this.MIN_WIDTH && newWidth < this.MAX_WIDTH) {
-                    wrapper.style.width = `${newWidth}px`
-                    wrapper.style.flex = `0 0 ${newWidth}px`
-                    // Notify Tabby's terminal frontends so they re-fit to the new content width.
-                    window.dispatchEvent(new Event('resize'))
+                const newWidth = Math.min(this.MAX_WIDTH,
+                    Math.max(this.MIN_WIDTH, startWidth + (moveEvent.clientX - startX)))
+                wrapper.style.width = `${newWidth}px`
+                wrapper.style.flex = `0 0 ${newWidth}px`
+                // Notify Tabby's terminal frontends so they re-fit to the new content width.
+                // A 'resize' event triggers a full relayout, so coalesce to at most one per frame
+                // instead of firing on every mousemove.
+                if (resizeFrame === null) {
+                    resizeFrame = requestAnimationFrame(() => {
+                        resizeFrame = null
+                        window.dispatchEvent(new Event('resize'))
+                    })
                 }
             }
 
-            // On release: detach the document listeners and persist the final width.
+            // On release: detach the document listeners, flush the final re-fit and persist the width.
             const onMouseUp = (): void => {
                 document.removeEventListener('mousemove', onMouseMove)
                 document.removeEventListener('mouseup', onMouseUp)
+                // Replace any still-queued frame with a synchronous dispatch so the terminals
+                // always end up fitted to the final width, even if the last frame never ran.
+                if (resizeFrame !== null) {
+                    cancelAnimationFrame(resizeFrame)
+                    resizeFrame = null
+                    window.dispatchEvent(new Event('resize'))
+                }
                 const finalWidth = Math.round(wrapper.getBoundingClientRect().width)
                 if (finalWidth >= this.MIN_WIDTH && finalWidth <= this.MAX_WIDTH) {
                     const pluginConfig = this.config.store.pluginConfig?.['ssh-sidebar'] || {}
