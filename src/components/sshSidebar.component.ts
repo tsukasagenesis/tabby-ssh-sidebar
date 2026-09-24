@@ -10,6 +10,8 @@ import {
     BaseComponent,
     PlatformService,
     HostAppService,
+    HostWindowService,
+    Platform,
 } from 'tabby-core'
 import { SSHProfile } from 'tabby-ssh'
 import { Subject } from 'rxjs'
@@ -35,7 +37,7 @@ interface ContextMenuPosition {
 @Component({
     selector: 'ssh-sidebar',
     template: `
-        <div class="ssh-sidebar-container" [class.collapsed]="collapsed">
+        <div class="ssh-sidebar-container" [class.collapsed]="collapsed" [class.mac-inset]="isMacInset">
             <!-- Sidebar Header -->
             <div class="ssh-sidebar-header">
                 <div class="ssh-sidebar-title">
@@ -247,6 +249,18 @@ interface ContextMenuPosition {
             padding: 12px 16px;
             border-bottom: 1px solid var(--bs-border-color);
             background: var(--bs-tertiary-bg);
+        }
+
+        /*
+         * On macOS the native window controls ("traffic lights") are drawn over
+         * the top-left of the window whenever the thin frame is used and there is
+         * no title bar. The sidebar is a sibling of Tabby's own profile-tree
+         * inside .window, so it sits in exactly that spot and the buttons would
+         * overlap the header. Mirror upstream's profile-tree.mac-inset rule --
+         * same offset, same conditions -- instead of hardcoding a pixel value.
+         */
+        .ssh-sidebar-container.mac-inset .ssh-sidebar-header {
+            padding-top: calc(12px + var(--tabs-height));
         }
 
         .ssh-sidebar-title {
@@ -504,9 +518,24 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         private translate: TranslateService,
         private platform: PlatformService,
         private hostApp: HostAppService,
+        private hostWindow: HostWindowService,
         @Inject(ProfileProvider) private profileProviders: ProfileProvider<Profile>[],
     ) {
         super()
+    }
+
+    /**
+     * Whether the sidebar needs to leave room for the macOS window controls.
+     *
+     * Matches the condition Tabby itself uses for `profile-tree.mac-inset`:
+     * the traffic lights only overlap the content when running on macOS with
+     * the thin frame and not in fullscreen. In every other case (Windows,
+     * Linux, fullscreen, or the full/native frame) no offset is wanted.
+     */
+    get isMacInset(): boolean {
+        return this.hostApp.platform === Platform.macOS
+            && !this.hostWindow.isFullscreen
+            && this.config.store.appearance?.frame === 'thin'
     }
 
     @HostListener('document:click', ['$event'])
@@ -959,15 +988,47 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         baseProfile.isBuiltin = false
         baseProfile.isTemplate = false
 
-        // Write the new profile
         this.config.store.profiles = this.config.store.profiles || []
-        this.config.store.profiles.push(baseProfile)
+
+        // Hand off to Tabby so the copy gets a real id. Tabby matches profiles by
+        // `id` almost everywhere, so a profile without one is not just cosmetically
+        // odd -- it is invisible to the profile selector, and any id-based lookup
+        // matches *every* id-less profile at once. Duplicating used to push a
+        // stripped clone straight into the config, which is exactly how that
+        // happened. newProfile() assigns `${type}:custom:${slug}:${uuid}` and
+        // pushes the profile itself, so it must not be pushed again here.
+        const profiles = this.profiles as any
+        if (typeof profiles.newProfile === 'function') {
+            await profiles.newProfile(baseProfile)
+        } else {
+            // Older Tabby (the 1.0.197 typings this builds against have no
+            // newProfile) -- mint an id in the same format rather than leaving
+            // the profile without one.
+            baseProfile.id = this.generateProfileId(baseProfile)
+            this.config.store.profiles.push(baseProfile)
+        }
+
         await this.config.save()
 
         // Refresh the profile list
         await this.refreshProfiles()
 
         this.contextMenuVisible = false
+    }
+
+    /**
+     * Builds an id in the same shape Tabby's own `newProfile()` uses, for the
+     * fallback path on Tabby versions that don't expose it.
+     */
+    private generateProfileId(profile: PartialProfile<Profile>): string {
+        const slug = (profile.name ?? 'profile')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'profile'
+        const uuid = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`
+        return `${profile.type}:custom:${slug}:${uuid}`
     }
 
     contextMenuCopySSHCommand(): void {
@@ -1026,8 +1087,21 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         })
 
         if (result.response === 0) {
-            // Remove from config
-            this.config.store.profiles = this.config.store.profiles.filter(p => p.id !== this.contextMenuProfile!.id)
+            // Remove by object identity, not by id. Filtering on `p.id !== target.id`
+            // deletes every profile sharing that id -- and `undefined === undefined`,
+            // so with any id-less profiles in the config (0.4.0 and earlier created
+            // them when duplicating) deleting one wiped out all of them. Identity
+            // removes exactly the profile the user right-clicked, and still cleans up
+            // the id-less profiles an older version may already have written.
+            const target = this.contextMenuProfile
+            const index = this.config.store.profiles.indexOf(target)
+            if (index !== -1) {
+                this.config.store.profiles.splice(index, 1)
+            } else if (target.id) {
+                // Not the same object (e.g. re-read from config) -- fall back to id,
+                // which is safe as long as the profile actually has one.
+                this.config.store.profiles = this.config.store.profiles.filter(p => p.id !== target.id)
+            }
             await this.config.save()
 
             // Refresh the profile list

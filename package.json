@@ -1,6 +1,6 @@
 {
   "name": "tabby-ssh-sidebar",
-  "version": "0.3.2",
+  "version": "0.4.1",
   "description": "A persistent SSH connections sidebar panel for Tabby Terminal with favorites, context menus, and profile management",
   "keywords": [
     "tabby-plugin",
@@ -10,6 +10,12 @@
     "tabby"
   ],
   "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "webpack --mode production",
     "watch": "webpack --mode development --watch",
@@ -37,14 +43,5 @@
     "typescript": "^5.4.5",
     "webpack": "^5.91.0",
     "webpack-cli": "^5.1.4"
-  },
-  "peerDependencies": {
-    "@angular/common": "17.3.5",
-    "@angular/core": "17.3.5",
-    "@angular/forms": "17.3.5",
-    "rxjs": "7.8.1",
-    "tabby-core": "1.0.197-nightly.1",
-    "tabby-terminal": "1.0.197-nightly.1",
-    "tabby-ssh": "1.0.197-nightly.1"
   }
 }
