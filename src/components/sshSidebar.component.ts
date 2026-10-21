@@ -23,6 +23,8 @@ interface ProfileGroup {
     name: string
     profiles: PartialProfile<SSHProfile>[]
     collapsed: boolean
+    parentGroupId?: string
+    children: ProfileGroup[]
 }
 
 interface ContextMenuPosition {
@@ -104,58 +106,49 @@ interface ContextMenuPosition {
 
             <!-- Profiles List (Tabby-style) -->
             <div class="ssh-sidebar-list list-group">
-                <ng-container *ngFor="let group of profileGroups">
-                    <ng-container *ngIf="isGroupVisible(group)">
-                        <!-- Group Header -->
-                        <div class="list-group-item list-group-item-action d-flex align-items-center group-header"
-                             (click)="toggleGroupCollapse(group)">
-                            <i class="fa fa-fw fa-chevron-right" *ngIf="group.collapsed && group.profiles.length > 0"></i>
-                            <i class="fa fa-fw fa-chevron-down" *ngIf="!group.collapsed && group.profiles.length > 0"></i>
-                            <span class="ms-2 me-auto">{{ group.name }}</span>
-                            <span class="badge bg-secondary">{{ group.profiles.length }}</span>
-                        </div>
-
-                        <!-- Group Profiles -->
-                        <ng-container *ngIf="!group.collapsed">
-                            <ng-container *ngFor="let profile of group.profiles">
-                                <div class="list-group-item profile-item d-flex align-items-center"
-                                     *ngIf="isProfileVisible(profile)"
-                                     [class.active]="isActiveConnection(profile)"
-                                     (click)="launchProfile(profile)"
-                                     (contextmenu)="onProfileContextMenu($event, profile)">
-
-                                    <!-- Profile Icon -->
-                                    <profile-icon
-                                        [icon]="profile.icon"
-                                        [color]="profile.color">
-                                    </profile-icon>
-
-                                    <!-- Profile Name & Description -->
-                                    <div class="profile-info">
-                                        <div class="profile-name">{{ profile.name }}</div>
-                                        <div class="profile-desc text-muted" *ngIf="getDescription(profile)">
-                                            {{ getDescription(profile) }}
+                <ng-container *ngTemplateOutlet="groupTree; context: {$implicit: profileGroups, depth: 0}"></ng-container>
+                <ng-template #groupTree let-groups let-depth="depth">
+                    <ng-container *ngFor="let group of groups">
+                        <ng-container *ngIf="isGroupVisible(group)">
+                            <div class="list-group-item list-group-item-action d-flex align-items-center group-header"
+                                 [style.padding-left.px]="16 + depth * 18"
+                                 (click)="toggleGroupCollapse(group)">
+                                <i class="fa fa-fw fa-chevron-right" *ngIf="group.collapsed"></i>
+                                <i class="fa fa-fw fa-chevron-down" *ngIf="!group.collapsed"></i>
+                                <span class="ms-2 me-auto">{{ group.name }}</span>
+                                <span class="badge bg-secondary">{{ countGroupProfiles(group) }}</span>
+                            </div>
+                            <ng-container *ngIf="!group.collapsed">
+                                <ng-container *ngFor="let profile of group.profiles">
+                                    <div class="list-group-item profile-item d-flex align-items-center"
+                                         *ngIf="isProfileVisible(profile)"
+                                         [style.padding-left.px]="20 + (depth + 1) * 18"
+                                         [class.active]="isActiveConnection(profile)"
+                                         (click)="launchProfile(profile)"
+                                         (contextmenu)="onProfileContextMenu($event, profile)">
+                                        <profile-icon [icon]="profile.icon" [color]="profile.color"></profile-icon>
+                                        <div class="profile-info">
+                                            <div class="profile-name">{{ profile.name }}</div>
+                                            <div class="profile-desc text-muted" *ngIf="getDescription(profile)">
+                                                {{ getDescription(profile) }}
+                                            </div>
                                         </div>
+                                        <div class="me-auto"></div>
+                                        <button class="btn btn-link btn-sm hover-reveal ms-1"
+                                                (click)="$event.stopPropagation(); launchProfile(profile)"
+                                                title="Launch connection">
+                                            <i class="fas fa-play"></i>
+                                        </button>
+                                        <span class="ms-1 badge" [ngClass]="'text-bg-' + getTypeColorClass(profile)">
+                                            {{ getTypeLabel(profile) }}
+                                        </span>
                                     </div>
-
-                                    <div class="me-auto"></div>
-
-                                    <!-- Launch Button -->
-                                    <button class="btn btn-link btn-sm hover-reveal ms-1"
-                                            (click)="$event.stopPropagation(); launchProfile(profile)"
-                                            title="Launch connection">
-                                        <i class="fas fa-play"></i>
-                                    </button>
-
-                                    <!-- Type Badge -->
-                                    <span class="ms-1 badge" [ngClass]="'text-bg-' + getTypeColorClass(profile)">
-                                        {{ getTypeLabel(profile) }}
-                                    </span>
-                                </div>
+                                </ng-container>
+                                <ng-container *ngTemplateOutlet="groupTree; context: {$implicit: group.children, depth: depth + 1}"></ng-container>
                             </ng-container>
                         </ng-container>
                     </ng-container>
-                </ng-container>
+                </ng-template>
 
                 <!-- Empty State -->
                 <div *ngIf="!hasVisibleProfiles()" class="ssh-sidebar-empty">
@@ -598,92 +591,81 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
                 return false
             }
 
-            // Exclude profiles without a host
+            // Accept host values inherited through nested group defaults.
             const sshProfile = p as PartialProfile<SSHProfile>
-            if (!sshProfile.options?.host) {
-                return false
+            let effectiveHost = sshProfile.options?.host
+            let groupId = sshProfile.group
+            const visited = new Set<string>()
+            while (!effectiveHost && groupId && !visited.has(groupId)) {
+                visited.add(groupId)
+                const group = this.configGroups.find(g => g.id === groupId)
+                if (!group) break
+                effectiveHost = group.defaults?.ssh?.options?.host
+                groupId = group.parentGroupId
             }
-
+            if (!effectiveHost) return false
             return true
         }) as PartialProfile<SSHProfile>[]
         await this.refreshProfileGroups()
     }
 
     async refreshProfileGroups(): Promise<void> {
-        const profileGroupCollapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}')
-
-        // Sort profiles first
+        const collapsed = JSON.parse(window.localStorage.profileGroupCollapsed ?? '{}')
         await this.sortProfiles()
 
-        // Group profiles by their group property
-        const grouped: { [key: string]: PartialProfile<SSHProfile>[] } = {}
+        const pinned = this.sshProfiles.filter(p => !!p.id && this.pinnedProfiles.includes(p.id))
+        const nodes = new Map<string, ProfileGroup>()
+        for (const g of this.configGroups) {
+            nodes.set(g.id, {
+                id: g.id,
+                name: g.name,
+                profiles: [],
+                collapsed: collapsed[g.id] ?? false,
+                parentGroupId: g.parentGroupId,
+                children: [],
+            })
+        }
 
+        const roots: ProfileGroup[] = []
+        const ungrouped: ProfileGroup = {
+            id: 'ungrouped', name: 'Ungrouped', profiles: [],
+            collapsed: collapsed.ungrouped ?? false, children: [],
+        }
         for (const profile of this.sshProfiles) {
-            const groupId = profile.group || 'ungrouped'
-            if (!grouped[groupId]) {
-                grouped[groupId] = []
-            }
-            grouped[groupId].push(profile)
+            if (profile.id && this.pinnedProfiles.includes(profile.id)) continue
+            const group = profile.group ? nodes.get(profile.group) : undefined
+            if (group) group.profiles.push(profile)
+            else ungrouped.profiles.push(profile)
         }
 
-        // Convert to ProfileGroup array
-        this.profileGroups = Object.entries(grouped).map(([groupId, profiles]) => {
-            let groupName = groupId
-            if (groupId !== 'ungrouped') {
-                // Try to resolve group ID to name from config
-                const configGroup = this.configGroups.find(g => g.id === groupId)
-                if (configGroup) {
-                    groupName = configGroup.name
-                }
-            } else {
-                groupName = 'Ungrouped'
-            }
-
-            return {
-                id: groupId,
-                name: groupName,
-                profiles,
-                collapsed: profileGroupCollapsed[groupId] ?? false,
-            }
-        })
-
-        // Add Favorites group at the top if there are pinned profiles
-        if (this.pinnedProfiles.length > 0) {
-            const pinnedProfileObjects = this.sshProfiles.filter(p =>
-                p.id && this.pinnedProfiles.includes(p.id)
-            )
-
-            if (pinnedProfileObjects.length > 0) {
-                // Remove pinned profiles from other groups
-                this.profileGroups.forEach(group => {
-                    group.profiles = group.profiles.filter(p =>
-                        !p.id || !this.pinnedProfiles.includes(p.id)
-                    )
-                })
-
-                // Add Favorites group at the beginning
-                this.profileGroups.unshift({
-                    id: 'favorites',
-                    name: '⭐ Favorites',
-                    profiles: pinnedProfileObjects,
-                    collapsed: profileGroupCollapsed['favorites'] ?? false,
-                })
-            }
+        for (const node of nodes.values()) {
+            const parent = node.parentGroupId ? nodes.get(node.parentGroupId) : undefined
+            if (parent && parent.id !== node.id) parent.children.push(node)
+            else roots.push(node)
         }
 
-        // Remove empty groups
-        this.profileGroups = this.profileGroups.filter(group =>
-            group.profiles.length > 0
-        )
-
-        // Sort groups: favorites first, ungrouped second, then alphabetically
-        this.profileGroups.sort((a, b) => {
-            if (a.id === 'favorites') return -1
-            if (b.id === 'favorites') return 1
-            if (a.id === 'ungrouped') return -1
-            if (b.id === 'ungrouped') return 1
-            return a.name.localeCompare(b.name)
-        })
+        // Prevent cyclic parent references from triggering endless recursion.
+        const visiting = new Set<string>()
+        const visited = new Set<string>()
+        const prune = (group: ProfileGroup): boolean => {
+            if (visiting.has(group.id)) return false
+            if (visited.has(group.id)) return group.profiles.length > 0 || group.children.length > 0
+            visiting.add(group.id)
+            group.children = group.children.filter(prune)
+            group.children.sort((a, b) => a.name.localeCompare(b.name))
+            visiting.delete(group.id)
+            visited.add(group.id)
+            return group.profiles.length > 0 || group.children.length > 0
+        }
+        this.profileGroups = roots.filter(prune)
+        this.profileGroups.sort((a, b) => a.name.localeCompare(b.name))
+        if (ungrouped.profiles.length) this.profileGroups.unshift(ungrouped)
+        if (pinned.length) {
+            this.profileGroups.unshift({
+                id: 'favorites', name: '⭐ Favorites', profiles: pinned,
+                collapsed: collapsed.favorites ?? false, children: [],
+            })
+        }
     }
 
     async sortProfiles(): Promise<void> {
@@ -737,7 +719,15 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     isGroupVisible(group: ProfileGroup): boolean {
-        return !this.filter || group.profiles.some(x => this.isProfileVisible(x))
+        return !this.filter ||
+            group.profiles.some(p => this.isProfileVisible(p)) ||
+            group.children.some(child => this.isGroupVisible(child))
+    }
+
+    countGroupProfiles(group: ProfileGroup): number {
+        return group.profiles.length + group.children.reduce(
+            (sum, child) => sum + this.countGroupProfiles(child), 0
+        )
     }
 
     isProfileVisible(profile: PartialProfile<Profile>): boolean {
@@ -789,9 +779,6 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
     }
 
     toggleGroupCollapse(group: ProfileGroup): void {
-        if (group.profiles.length === 0) {
-            return
-        }
         group.collapsed = !group.collapsed
         this.saveProfileGroupCollapse(group)
     }
