@@ -16,6 +16,7 @@ import { SSHProfile } from 'tabby-ssh'
 import { SSHSidebarComponent } from './components/sshSidebar.component'
 import { InheritanceModalComponent } from './components/inheritanceModal.component'
 import { NormalizeGroupModalComponent } from './components/normalizeGroupModal.component'
+import { SetGroupPasswordModalComponent } from './components/setGroupPasswordModal.component'
 import { SSHSidebarService } from './services/sshSidebar.service'
 
 /**
@@ -156,6 +157,7 @@ export class SSHSidebarInitializer {
         SSHSidebarComponent,
         InheritanceModalComponent,
         NormalizeGroupModalComponent,
+        SetGroupPasswordModalComponent,
     ],
     providers: [
         {

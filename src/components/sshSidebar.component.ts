@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, HostBinding, Inject, HostListener, ViewChild, ElementRef } from '@angular/core'
+import { Component, OnInit, OnDestroy, HostBinding, Inject, HostListener, ViewChild, ElementRef, Injector } from '@angular/core'
 import {
     ProfilesService,
     AppService,
@@ -22,6 +22,7 @@ import deepClone from 'clone-deep'
 import { InheritanceReport, analyseOptions, markerFor, mergeDefaults } from '../services/inheritance'
 import { InheritanceModalComponent, InheritanceResult } from './inheritanceModal.component'
 import { NormalizeGroupModalComponent, NormalizeResult } from './normalizeGroupModal.component'
+import { SetGroupPasswordModalComponent, SetGroupPasswordResult } from './setGroupPasswordModal.component'
 import { NormalizeEntry, buildNormalizePlan } from '../services/normalize'
 
 interface ProfileGroup {
@@ -127,8 +128,8 @@ interface ContextMenuPosition {
                              (click)="toggleGroupCollapse(group)"
                              (contextmenu)="onGroupContextMenu($event, group)">
                             <i class="fa fa-fw"
-                               [class.fa-chevron-right]="group.collapsed"
-                               [class.fa-chevron-down]="!group.collapsed"
+                               [class.fa-chevron-right]="group.collapsed && !filter"
+                               [class.fa-chevron-down]="!group.collapsed || filter"
                                [style.visibility]="group.profiles.length > 0 ? 'visible' : 'hidden'"></i>
                             <i class="fa-fw ms-1 group-icon"
                                [ngClass]="group.icon || 'far fa-folder'"
@@ -143,8 +144,13 @@ interface ContextMenuPosition {
                             <span class="badge bg-secondary">{{ group.profiles.length }}</span>
                         </div>
 
-                        <!-- Group Profiles -->
-                        <ng-container *ngIf="!group.collapsed">
+                        <!-- Group Profiles.
+                             While filtering, collapsed groups open anyway: a group
+                             only survives isGroupVisible() when it holds a match, and
+                             hiding those matches behind the collapsed state made search
+                             look broken - you would see the group header and none of
+                             the hosts. Collapse is restored as soon as the filter clears. -->
+                        <ng-container *ngIf="!group.collapsed || filter">
                             <ng-container *ngFor="let profile of group.profiles">
                                 <div class="list-group-item profile-item d-flex align-items-center"
                                      *ngIf="isProfileVisible(profile)"
@@ -220,6 +226,12 @@ interface ContextMenuPosition {
                 <ng-container *ngIf="contextMenuMode === 'group'">
                     <div class="context-menu-header">{{ contextMenuGroup?.name }}</div>
                     <div class="context-menu-divider"></div>
+                    <div class="context-menu-item"
+                         *ngIf="contextMenuGroup && contextMenuGroup.profiles.length"
+                         (click)="contextMenuSetGroupPassword()">
+                        <i class="fas fa-fw fa-key"></i>
+                        <span>Set password for all hosts...</span>
+                    </div>
                     <div class="context-menu-item"
                          *ngIf="contextMenuGroup && isEditableGroup(contextMenuGroup) && (contextMenuGroup.blankCount || contextMenuGroup.duplicateCount)"
                          (click)="contextMenuNormalizeGroup()">
@@ -649,6 +661,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         private config: ConfigService,
         private translate: TranslateService,
         private platform: PlatformService,
+        private injector: Injector,
         private hostApp: HostAppService,
         private ngbModal: NgbModal,
         private selector: SelectorService,
@@ -833,6 +846,106 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
             parts.push(`${group.overrideCount} profile(s) set something that disagrees with the group`)
         }
         return parts.join('; ')
+    }
+
+    /**
+     * tabby-ssh's published typings do not re-export PasswordStorageService even
+     * though the shipped runtime does, so it is resolved through the injector
+     * rather than imported. Typed to just the one method we call.
+     */
+    private get passwordStorage(): { savePassword (profile: any, password: string, username?: string): Promise<void> } | null {
+        try {
+            const { PasswordStorageService } = window['nodeRequire']('tabby-ssh')
+            return this.injector.get(PasswordStorageService)
+        } catch (error) {
+            console.error('SSH Sidebar: PasswordStorageService is unavailable:', error)
+            return null
+        }
+    }
+
+    /**
+     * Saves one password against every distinct connection in a group.
+     *
+     * PasswordStorageService keys a secret by host + port + username, read off
+     * the object it is handed - so each profile must be resolved through
+     * getConfigProxyForProfile first. Passing the raw profile would leave an
+     * inherited username undefined, and savePassword returns silently without
+     * saving when it has no account. Most profiles here inherit their username,
+     * so that failure would be both total and invisible.
+     */
+    async contextMenuSetGroupPassword(): Promise<void> {
+        const group = this.contextMenuGroup
+        this.contextMenuVisible = false
+
+        if (!group?.profiles.length) {
+            return
+        }
+
+        interface Target {
+            key: string
+            effective: any
+            name: string
+        }
+
+        const targets = new Map<string, Target>()
+        const skipped: string[] = []
+
+        for (const profile of group.profiles) {
+            const effective = (this.profiles as any).getConfigProxyForProfile(profile)
+            const host = effective?.options?.host
+            const user = effective?.options?.user
+            if (!host || !user) {
+                skipped.push(profile.name ?? '(unnamed)')
+                continue
+            }
+            const key = `${user}@${host}:${effective.options.port ?? 22}`
+            if (!targets.has(key)) {
+                targets.set(key, { key, effective, name: profile.name ?? key })
+            }
+        }
+
+        if (!targets.size) {
+            this.notifications.error('No host in this group has both a hostname and a username')
+            return
+        }
+
+        const storage = this.passwordStorage
+        if (!storage) {
+            this.notifications.error('Tabby\'s password storage is unavailable, so passwords cannot be saved')
+            return
+        }
+
+        const modal = this.ngbModal.open(SetGroupPasswordModalComponent)
+        modal.componentInstance.groupName = group.name
+        modal.componentInstance.connectionCount = targets.size
+        modal.componentInstance.profileCount = group.profiles.length
+        modal.componentInstance.skipped = skipped
+
+        const result: SetGroupPasswordResult | null = await modal.result.catch(() => null)
+        if (!result?.password) {
+            return
+        }
+
+        let saved = 0
+        const failed: string[] = []
+        for (const target of targets.values()) {
+            try {
+                await storage.savePassword(target.effective, result.password)
+                saved++
+            } catch (error) {
+                // Never include the password or the error's payload in the log
+                console.error(`SSH Sidebar: could not save a password for ${target.key}`)
+                failed.push(target.name)
+            }
+        }
+
+        if (failed.length) {
+            this.notifications.error(
+                `Saved ${saved} of ${targets.size} passwords. Failed: ${failed.slice(0, 3).join(', ')}`)
+        } else {
+            this.notifications.info(
+                `Saved the password for ${saved} connection${saved === 1 ? '' : 's'} in ${group.name}`)
+        }
     }
 
     async contextMenuNormalizeGroup(): Promise<void> {
