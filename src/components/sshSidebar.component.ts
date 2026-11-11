@@ -153,7 +153,7 @@ interface ContextMenuPosition {
                         <ng-container *ngIf="!group.collapsed || filter">
                             <ng-container *ngFor="let profile of group.profiles">
                                 <div class="list-group-item profile-item d-flex align-items-center"
-                                     *ngIf="isProfileVisible(profile)"
+                                     *ngIf="isProfileVisible(profile, group)"
                                      [class.active]="isActiveConnection(profile)"
                                      [class.unconnectable]="hasNoHost(profile)"
                                      (click)="launchProfile(profile)"
@@ -1282,12 +1282,30 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         // Filter is applied in the template via isProfileVisible
     }
 
-    isGroupVisible(group: ProfileGroup): boolean {
-        return !this.filter || group.profiles.some(x => this.isProfileVisible(x))
+    /** True when the filter matches the group's own name. */
+    isGroupMatch(group: ProfileGroup): boolean {
+        return !!this.filter && (group.name ?? '').toLowerCase().includes(this.filter.toLowerCase())
     }
 
-    isProfileVisible(profile: PartialProfile<Profile>): boolean {
+    isGroupVisible(group: ProfileGroup): boolean {
         if (!this.filter) {
+            return true
+        }
+        // A group shows either because its own name matches, or because
+        // something inside it does
+        return this.isGroupMatch(group) || group.profiles.some(x => this.isProfileVisible(x, group))
+    }
+
+    /**
+     * The group is passed in so that searching for a group's name reveals
+     * everything inside it. Matching only profile names meant typing a group
+     * name returned nothing at all, which is the obvious thing to try first.
+     */
+    isProfileVisible(profile: PartialProfile<Profile>, group?: ProfileGroup): boolean {
+        if (!this.filter) {
+            return true
+        }
+        if (group && this.isGroupMatch(group)) {
             return true
         }
         const searchText = (profile.name + '$' + (this.getDescription(profile) ?? '')).toLowerCase()
