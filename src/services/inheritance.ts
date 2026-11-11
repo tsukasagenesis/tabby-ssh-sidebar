@@ -235,6 +235,27 @@ export function analyseOptions(stored: any, groupOpts: any, fallback: any): Inhe
 }
 
 /**
+ * Whether Tabby writes this key onto a profile by itself.
+ *
+ * ConfigProxy.__getValue materialises array and __nonStructural defaults into the
+ * raw profile the moment Tabby resolves it - which happens on every connect - and
+ * the next config.save() persists them. So a profile holding an array identical
+ * to its group's is Tabby's own bookkeeping, not something anyone chose, and it
+ * reappears however often it is cleared.
+ *
+ * Scalars are never materialised this way, so a scalar duplicate really was set
+ * by hand and really does stop the profile following its group.
+ */
+export function isAutoMaterialised(row: SettingRow): boolean {
+    return Array.isArray(row.stored) || Array.isArray(row.group) || Array.isArray(row.fallback)
+}
+
+/** Duplicates that someone actually created, worth drawing attention to. */
+export function meaningfulDuplicates(report: InheritanceReport): SettingRow[] {
+    return report.rows.filter(r => r.state === 'duplicate' && !isAutoMaterialised(r))
+}
+
+/**
  * The single most notable thing about a profile, for the sidebar marker.
  *
  * Ordered by how much it is likely to surprise: a blank that inherits nothing,
@@ -245,7 +266,9 @@ export function markerFor(report: InheritanceReport): 'blank' | 'duplicate' | 'o
     if (report.counts.blank > 0) {
         return 'blank'
     }
-    if (report.counts.duplicate > 0) {
+    // Deliberately not report.counts.duplicate: an array copy that Tabby wrote
+    // itself on connect is noise, and flagging it means never reaching zero
+    if (meaningfulDuplicates(report).length > 0) {
         return 'duplicate'
     }
     if (report.counts.override > 0) {

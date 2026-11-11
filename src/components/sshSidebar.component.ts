@@ -19,7 +19,7 @@ import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
 import { Subject } from 'rxjs'
 import { takeUntil, debounceTime } from 'rxjs/operators'
 import deepClone from 'clone-deep'
-import { InheritanceReport, analyseOptions, markerFor, mergeDefaults } from '../services/inheritance'
+import { InheritanceReport, analyseOptions, markerFor, meaningfulDuplicates, mergeDefaults } from '../services/inheritance'
 import { InheritanceModalComponent, InheritanceResult } from './inheritanceModal.component'
 import { NormalizeGroupModalComponent, NormalizeResult } from './normalizeGroupModal.component'
 import { SetGroupPasswordModalComponent, SetGroupPasswordResult } from './setGroupPasswordModal.component'
@@ -825,8 +825,9 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
         if (report.counts.blank) {
             return `${report.counts.blank} setting(s) blank while the group provides a value`
         }
-        if (report.counts.duplicate) {
-            return `${report.counts.duplicate} setting(s) stored here as well as on the group, so they will not follow group changes`
+        const duplicates = meaningfulDuplicates(report).length
+        if (duplicates) {
+            return `${duplicates} setting(s) stored here as well as on the group, so they will not follow group changes`
         }
         return `${report.counts.override} setting(s) set here that disagree with the group`
     }
@@ -1210,7 +1211,7 @@ export class SSHSidebarComponent extends BaseComponent implements OnInit, OnDest
                 }
                 if (report.counts.blank > 0) {
                     blank++
-                } else if (report.counts.duplicate > 0) {
+                } else if (meaningfulDuplicates(report).length > 0) {
                     duplicate++
                 } else if (report.counts.override > 0) {
                     override++

@@ -1,7 +1,7 @@
 import { Component } from '@angular/core'
 import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
 import { PartialProfile, Profile } from 'tabby-core'
-import { InheritanceReport, SettingRow, isIdentityKey, isResettable, isSafeToInherit, resultOfInheriting } from '../services/inheritance'
+import { InheritanceReport, SettingRow, isAutoMaterialised, isIdentityKey, isResettable, isSafeToInherit, resultOfInheriting } from '../services/inheritance'
 
 const REDACTED_KEYS = ['password', 'privateKeys', 'passphrase']
 
@@ -88,6 +88,9 @@ export interface InheritanceResult {
                             </td>
                             <td>
                                 <span class="badge" [ngClass]="badgeClass(row)">{{ label(row) }}</span>
+                                <i class="fas fa-rotate text-muted small ms-1"
+                                   *ngIf="rewrittenByTabby(row)"
+                                   title="Tabby writes this onto the profile again whenever you connect, so clearing it will not stay cleared"></i>
                             </td>
                             <td class="text-end">
                                 <button class="btn btn-sm btn-link py-0"
@@ -261,6 +264,11 @@ export class InheritanceModalComponent {
             local: 'text-bg-secondary',
             tidy: 'text-bg-secondary',
         }[row.state]
+    }
+
+    /** Flags rows Tabby recreates on connect, so clearing them looks ineffective. */
+    rewrittenByTabby(row: SettingRow): boolean {
+        return row.state === 'duplicate' && isAutoMaterialised(row)
     }
 
     canInherit(row: SettingRow): boolean {
